@@ -1,2 +1,0 @@
-# PromptToCommand
-terminal command generator

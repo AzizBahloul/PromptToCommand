@@ -1,0 +1,12 @@
+MANIFEST.in
+README.md
+setup.py
+bourguiba/__init__.py
+bourguiba/bourguiba.py
+bourguiba/model_downloader.py
+bourguiba.egg-info/PKG-INFO
+bourguiba.egg-info/SOURCES.txt
+bourguiba.egg-info/dependency_links.txt
+bourguiba.egg-info/entry_points.txt
+bourguiba.egg-info/requires.txt
+bourguiba.egg-info/top_level.txt
