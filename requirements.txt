@@ -1,2 +1,5 @@
 transformers
 torch
+textblob
+pyspellchecker
+
