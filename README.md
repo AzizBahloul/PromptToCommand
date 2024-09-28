@@ -1,44 +1,53 @@
-# Bourguiba
 
-Bourguiba is a Python library that generates commands based on descriptions using the T5-small model from Meta AI.
+**Bourguiba - Command Generation Library**
 
-## Installation
+Bourguiba is a Python library designed to generate shell commands based on natural language input. This tool leverages advanced machine learning models to understand user intent and produce valid shell commands, making it easier for users to interact with the command line.
 
-You can install Bourguiba using pip:
+**Features:**
+
+- Generates common shell commands based on user descriptions.
+- Includes a comprehensive list of 150 common commands.
+- Utilizes a pretrained GPT-2 model for command generation.
+- Supports fuzzy matching to improve command accuracy based on user input.
+- Simple command-line interface for easy usage.
+
+**Installation:**
+
+You can install the bourguiba package via pip. Run the following command in your terminal:
 
 ```
 pip install bourguiba
 ```
 
-During installation, the T5-small model will be downloaded and stored in your home directory under `.bourguiba_model`.
+**Usage:**
 
-## Usage
+To use bourguiba, simply import the library and create an instance of the CommandGenerator class. You can then call the `generate_command` method with a description of the command you wish to create.
 
-After installation, you can use Bourguiba from the command line:
-
-```
-bourguiba "create a Python file"
-```
-
-This will generate a command based on the given description.
-
-You can also use Bourguiba in your Python scripts:
+Example:
 
 ```python
-from bourguiba import Bourguiba
+from bourguiba import CommandGenerator
 
-bourguiba = Bourguiba()
-command = bourguiba.generate_command("create a Python file")
-print(f"Generated command: {command}")
+generator = CommandGenerator()
+command = generator.generate_command("I want to create a folder")
+print(command)  # Output: mkdir [folder_name]
 ```
 
-## Requirements
 
-- Python 3.6+
-- torch
-- transformers
-- sentencepiece
+**Contributing:**
 
-## License
+Contributions are welcome! If you would like to contribute to bourguiba, please fork the repository and submit a pull request.
 
-This project is licensed under the MIT License.
+**License:**
+
+This project is licensed under the MIT License. See the LICENSE file for details.
+
+
+
+Special thanks to the creators of the GPT-2 model and the developers of the transformers library, which make this project possible.
+
+For more information, please visit the GitHub repository.
+
+---
+
+Feel free to modify any sections to better fit your preferences!
