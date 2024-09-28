@@ -1,47 +1,71 @@
-import sys
-import re
 import os
-import torch
 from transformers import T5Tokenizer, T5ForConditionalGeneration
-from instruction import generate_instruction  # Ensure this matches your file structure
+import subprocess
+import platform
 
 class Bourguiba:
-    def __init__(self, model_name="t5-small"):
-        self.tokenizer = T5Tokenizer.from_pretrained(model_name)
-        self.model = T5ForConditionalGeneration.from_pretrained(model_name)
+    def __init__(self):
+        self.model_name = 'google/flan-t5-small'
+        self.model_dir = os.path.expanduser("~/.bourguiba_model")
+
+        # Download and cache the model locally
+        self.tokenizer = T5Tokenizer.from_pretrained(self.model_name, cache_dir=self.model_dir)
+        self.model = T5ForConditionalGeneration.from_pretrained(self.model_name, cache_dir=self.model_dir)
 
     def generate_command(self, description):
-        # Generate instruction using the modified function
-        instruction = generate_instruction(description)
-        input_ids = self.tokenizer.encode(instruction, return_tensors="pt")
+        # Prepare the input for the model
+        input_text = f"Generate command: {description}"
+        input_ids = self.tokenizer.encode(input_text, return_tensors="pt")
 
-        generated_ids = self.model.generate(input_ids, max_length=50)
-        generated_text = self.tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+        # Generate the command
+        output_ids = self.model.generate(input_ids, max_length=50)
+        command = self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
+        
+        # Clean up the generated command for execution
+        cleaned_command = self.clean_command(command)
+        return cleaned_command
 
-        return self.extract_command(generated_text)
+    def clean_command(self, command):
+        # Implement basic cleaning logic to make the command valid
+        command = command.strip()
 
-    def extract_command(self, generated_text):
-        # Enhanced command extraction logic to return only valid commands
-        generated_text = generated_text.strip()
-        # Regex to match valid shell command patterns
-        command_matches = re.findall(r'^(.*)$', generated_text)
-        if command_matches:
-            command = command_matches[0].strip()
-            # Check if it's a valid shell command (simple heuristic)
-            if command.startswith(('ls', 'mkdir', 'touch', 'rm', 'cp', 'mv', 'cat', 'echo', 'man')):
-                return command
-        return "Could not generate a valid command."
+        # Platform-specific command adjustments
+        system_platform = platform.system()
+
+        if system_platform == 'Linux':
+            # Ubuntu-specific adjustments (add any custom command mappings here)
+            if command.startswith("Create a folder"):
+                command = command.replace("Create a folder", "mkdir")
+        elif system_platform == 'Darwin':
+            # macOS-specific adjustments
+            if command.startswith("Create a folder"):
+                command = command.replace("Create a folder", "mkdir")
+        elif system_platform == 'Windows':
+            # Windows-specific adjustments
+            if command.startswith("Create a folder"):
+                command = command.replace("Create a folder", "mkdir")
+                command += " -Force"  # Windows might need force for certain operations
+
+        return command
 
 def main():
     bourguiba = Bourguiba()
-    try:
-        description = input("Enter your command description: ")
+    print("Enter your command description (or 'quit' to exit):")
+    
+    while True:
+        description = input("> ")
+        if description.lower() == 'quit':
+            break
+        
         command = bourguiba.generate_command(description)
         print(f"Generated command: {command}")
-        # Uncomment the following line to actually execute the command
-        # os.system(command)
-    except Exception as e:
-        print(f"Error: {str(e)}")
+
+        # Execute the command and capture output
+        try:
+            result = subprocess.run(command, shell=True, check=True, text=True, capture_output=True)
+            print("Output:", result.stdout)
+        except subprocess.CalledProcessError as e:
+            print("Error executing command:", e.stderr)
 
 if __name__ == "__main__":
     main()
