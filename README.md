@@ -11,14 +11,6 @@ Bourguiba is a Python library designed to generate shell commands based on natur
 - Supports fuzzy matching to improve command accuracy based on user input.
 - Simple command-line interface for easy usage.
 
-**Installation:**
-
-You can install the bourguiba package via pip. Run the following command in your terminal:
-
-```
-pip install bourguiba
-```
-
 **Usage:**
 
 To use bourguiba, simply import the library and create an instance of the CommandGenerator class. You can then call the `generate_command` method with a description of the command you wish to create.
