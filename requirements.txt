@@ -1,5 +1,5 @@
-transformers
-torch
+transformers==4.48.0
+torch>=1.13.0,<3.0
 textblob
 pyspellchecker
-
+numpy<2.0
