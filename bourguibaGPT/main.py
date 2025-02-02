@@ -13,6 +13,9 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.progress import Progress
+from rich.text import Text
+from rich.layout import Layout
+from rich import box
 import requests
 import subprocess
 from datetime import datetime
@@ -26,6 +29,20 @@ logging.basicConfig(
 
 # Initialize console for rich output
 console = Console()
+
+BANNER = """
+╔══════════════════════════════════════════════════════════════╗
+║  ____                            _ _           ____ ____ _____ ║
+║ | __ ) ___  _   _ _ __ __ _ _  (_) |__   __ / ___|  _ \_   _|║
+║ |  _ \/ _ \| | | | '__/ _` | | | | '_ \ / _` | |  | |_) || |  ║
+║ | |_) | (_) | |_| | | | (_| | |_| | |_) | (_| | |__| __/ | |  ║
+║ |____/\___/ \__,_|_|  \__, |\__,_|_.__/ \__,_|\____|_|   |_|  ║
+║                          |_|                                    ║
+║              Your Tunisian Shell Command Assistant             ║
+╚══════════════════════════════════════════════════════════════╝
+"""
+
+VERSION = "1.0.0"
 
 class ShellCommandGenerator:
     def __init__(
@@ -261,12 +278,17 @@ class ShellCommandGenerator:
 
     def run(self) -> None:
         """Interactive command generation loop with enhanced features"""
-        console.print("[bold green]Enhanced Shell Command Generator[/bold green]")
-        console.print("[blue]Type 'help' for available commands, 'exit' to quit[/blue]")
+        # Display banner and welcome message
+        console.print(f"[bold cyan]{BANNER}[/bold cyan]")
+        console.print(f"[bold blue]BourguibaGPT[/bold blue] [cyan]v{VERSION}[/cyan]")
+        console.print("[dim]Powered by Ollama - Model: {self.model_name}[/dim]")
+        console.print("\n[italic]Type 'help' for available commands or 'exit' to quit[/italic]\n")
         
         while True:
             try:
-                user_input = Prompt.ask("\n[bold blue]What command do you need?[/bold blue]")
+                user_input = Prompt.ask(
+                    "\n[bold magenta]🇹🇳 BourguibaGPT[/bold magenta] [bold blue]→[/bold blue]"
+                )
                 
                 if user_input.lower() in ['exit', 'quit']:
                     break
@@ -296,19 +318,26 @@ class ShellCommandGenerator:
 
     def _show_help(self) -> None:
         """Display help information"""
-        help_text = """
-        Available Commands:
-        - help: Show this help message
-        - history: Show command history
-        - execute <command>: Execute a specific command
-        - exit/quit: Exit the program
+        help_text = """[bold]Available Commands:[/bold]
         
-        Tips:
-        - Be specific in your command requests
-        - Use natural language to describe what you want to do
-        - The generator will validate commands for safety
+        [cyan]help[/cyan] - Show this help message
+        [cyan]history[/cyan] - Show command history
+        [cyan]execute <command>[/cyan] - Execute a specific command
+        [cyan]exit/quit[/cyan] - Exit BourguibaGPT
+        
+        [bold]Tips:[/bold]
+        
+        • Be specific in your command requests
+        • Use natural language to describe what you want to do
+        • Commands are validated for safety
+        • History is saved automatically
         """
-        console.print(Panel(help_text, title="Help", border_style="blue"))
+        console.print(Panel(
+            help_text,
+            title="[bold]BourguibaGPT Help[/bold]",
+            border_style="blue",
+            box=box.DOUBLE
+        ))
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments"""
