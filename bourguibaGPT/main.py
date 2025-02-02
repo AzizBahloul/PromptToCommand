@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import platform
 import re
 import sys
