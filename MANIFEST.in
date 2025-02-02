@@ -1,0 +1,7 @@
+include README.md
+include LICENSE
+include requirements.txt
+recursive-include src/bourguibagpt *.py
+prune __pycache__
+prune *.egg-info
+global-exclude *.pyc *.pyo
