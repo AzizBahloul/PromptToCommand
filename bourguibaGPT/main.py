@@ -31,7 +31,7 @@ console = Console()
 class ShellCommandGenerator:
     def __init__(
         self,
-        model_name: str = "llama3.2:3b",  # <-- updated model name
+        model_name: str = "deepseek-r1:1.5b",  # Updated default model name
         temperature: float = 0.7,
         auto_execute: bool = False,
         history_file: Optional[Path] = None,
@@ -174,8 +174,8 @@ class ShellCommandGenerator:
         if not command or len(command.strip()) == 0:
             return False
             
-        # Basic command structure validation
-        if not re.match(r'^[a-zA-Z0-9_-]+(\s+[^\s]+)*$', command):
+        # Basic command structure validation (now allowing dots and slashes)
+        if not re.match(r'^[\w\./-]+(?:\s+[\w\./-]+)*$', command):
             return False
 
         # Check for potentially dangerous patterns
