@@ -1,2 +1,2 @@
 rich==13.6.0
-requests
+requestsCount the number of lines in 'test.txt'.

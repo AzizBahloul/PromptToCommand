@@ -8,7 +8,7 @@ import time
 import signal
 import json
 from pathlib import Path
-from typing import Optional, List, Dict, Union
+from typing import Optional, List, Dict, Union, Any
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
@@ -30,44 +30,65 @@ logging.basicConfig(
 # Initialize console for rich output
 console = Console()
 
+# Fix banner alignment
 BANNER = """
 ╔══════════════════════════════════════════════════════════════╗
 ║  ____                            _ _           ____ ____ _____ ║
-║ | __ ) ___  _   _ _ __ __ _ _  (_) |__   __ / ___|  _ \_   _|║
-║ |  _ \/ _ \| | | | '__/ _` | | | | '_ \ / _` | |  | |_) || |  ║
+║ | __ ) ___  _   _ _ __ __ _ _  (_) |__   __ / ___|  _ \\_   _|║
+║ |  _ \\/ _ \\| | | | '__/ _` | | | | '_ \\ / _` | |  | |_) || |  ║
 ║ | |_) | (_) | |_| | | | (_| | |_| | |_) | (_| | |__| __/ | |  ║
-║ |____/\___/ \__,_|_|  \__, |\__,_|_.__/ \__,_|\____|_|   |_|  ║
+║ |____/\\___/ \\__,_|_|  \\__, |\\__,_|_.__/ \\__,_|\\____|_|   |_|  ║
 ║                          |_|                                    ║
-║              Your Tunisian Shell Command Assistant             ║
-╚══════════════════════════════════════════════════════════════╝
+║              Your Tunisian Shell Command Assistant             ╚══════════════════════════════════════════════════════════════╝
 """
 
-VERSION = "1.0.2"
+VERSION = "2.0.0"
 
 class ShellCommandGenerator:
+    """Shell command generator with enhanced safety and reliability"""
+    
     def __init__(
         self,
-        model_name: str = "deepseek-r1:1.5b",  # Updated default model name
+        model_name: str = "phi3:mini",
         temperature: float = 0.7,
         auto_execute: bool = False,
         history_file: Optional[Path] = None,
         max_retries: int = 3,
         timeout: int = 30
-    ):
+    ) -> None:
+        # Validate parameters
+        if not isinstance(temperature, float) or not 0 <= temperature <= 1:
+            raise ValueError("Temperature must be a float between 0 and 1")
+        if not isinstance(max_retries, int) or max_retries < 1:
+            raise ValueError("max_retries must be a positive integer")
+            
         self.model_name = model_name
         self.temperature = temperature
         self.auto_execute = auto_execute
         self.max_retries = max_retries
         self.timeout = timeout
-        self.command_history: List[Dict] = []
+        self.command_history: List[Dict[str, Any]] = []
         self.ollama_api = "http://localhost:11434/api/generate"
         self.history_file = history_file or Path.home() / ".shell_command_history.json"
         
-        # Load command history
+        # Load history and check Ollama status
         self._load_history()
-        # Verify Ollama is running
         self._check_ollama_status()
         
+    def get_os_info(self) -> str:
+        """Detect the operating system and, if Linux, the distribution."""
+        os_name = platform.system()
+        if (os_name == "Linux"):
+            try:
+                with open("/etc/os-release", "r") as f:
+                    for line in f:
+                        if line.startswith("PRETTY_NAME"):
+                            # Format: PRETTY_NAME="Ubuntu 20.04.2 LTS"
+                            return line.split("=")[1].strip().strip('"')
+            except Exception as e:
+                logging.warning(f"Could not detect Linux distribution: {e}")
+        return os_name
+
     def _load_history(self) -> None:
         """Load command history from file"""
         try:
@@ -119,102 +140,100 @@ class ShellCommandGenerator:
                 console.print(f"[red]Error checking Ollama status: {e}[/red]")
                 sys.exit(1)
 
-    def generate_command(self, prompt: str) -> Optional[str]:
-        """Generate shell command using Ollama with retry logic"""
-        system_prompt = (
-            "You are an expert in shell commands. Generate exactly one safe Linux/Unix command that fulfills the request.\n"
-            "Return ONLY the valid command as a single line without ANY explanation, comments, formatting, or punctuation.\n"
-            "The command must: \n"
-            "- Be safe to execute, operating in the current working directory unless an absolute path is provided\n"
-            "- Not contain destructive operations\n"
-            "- Be properly escaped if needed\n"
-            "- Use only basic utilities\n"
-            f"User Request: {prompt}\n"
-            "Command:"
-        )
+    def generate_command(self, prompt: str) -> Dict[str, Any]:
+        """Generate shell command from user prompt."""
+        try:
+            response = self._call_ollama(prompt)
+            
+            if not response or 'command' not in response:
+                raise ValueError("Failed to generate valid command")
+                
+            command = response['command'].strip()
+            if not command:
+                raise ValueError("Generated command is empty")
+                
+            result = {
+                'prompt': prompt,
+                'command': command,
+                'timestamp': datetime.now().isoformat(),
+                'success': True,
+                'error': None
+            }
+            
+            self.command_history.append(result)
+            return result
+            
+        except Exception as e:
+            error_result = {
+                'prompt': prompt,
+                'command': None, 
+                'timestamp': datetime.now().isoformat(),
+                'success': False,
+                'error': str(e)
+            }
+            self.command_history.append(error_result)
+            print(f"Error generating command: {str(e)}")
+            return error_result
+
+    def _extract_command(self, text: str) -> Optional[str]:
+        """Extract command with improved parsing"""
+        # Look for CMD: prefix
+        if match := re.search(r'CMD:\s*(.+)$', text, re.MULTILINE):
+            command = match.group(1).strip()
+            # Basic command structure validation
+            if re.match(r'^[\w.-]+(\s+[\w."\'*?/-]+)*$', command):
+                return command
+        return None
+
+    def _validate_command(self, command: str) -> bool:
+        """Simplified but strict command validation"""
+        # Whitelist of safe commands
+        SAFE_COMMANDS = {
+            'ls': r'-[altrh]*',
+            'mkdir': r'[\w.-]+',
+            'touch': r'[\w.-]+',
+            'cat': r'[\w.-]+',
+            'echo': r'"[^"]*"',
+            'pwd': '',
+            'find': r'\. -name "[\w.*]+"',
+            'grep': r'-[ivr]+ "[\w ]+"',
+            'cd': r'[\w./-]*'  # Added cd command support
+        }
         
-        for attempt in range(self.max_retries):
-            try:
-                response = requests.post(
-                    self.ollama_api,
-                    json={
-                        "model": self.model_name,
-                        "prompt": system_prompt,
-                        "temperature": self.temperature,
-                        "stream": False
-                    },
-                    timeout=self.timeout
-                )
-                
-                if response.status_code == 200:
-                    response_data = response.json()
-                    generated_text = response_data.get('response', '').strip()
-                    
-                    command = self.extract_command(generated_text)
-                    
-                    if command and self.validate_command(command):
-                        self._add_to_history(prompt, command)
-                        return command
-                        
-                logging.warning(f"Attempt {attempt + 1} failed to generate valid command")
-                
-            except requests.exceptions.Timeout:
-                logging.error("Request timed out")
-            except Exception as e:
-                logging.error(f"Generation error: {e}")
-                
-            if attempt < self.max_retries - 1:
-                time.sleep(1)  # Wait before retry
-                
-        return None
-
-    def extract_command(self, generated_text: str) -> Optional[str]:
-        """Improved command extraction by selecting the most relevant command.
-           If multiple commands are concatenated, it trims off dangerous parts.
-        """
-        lines = [line.strip() for line in generated_text.splitlines() if line.strip()]
-        command_pattern = r'^[\w\./-]+(?:\s+[\w\./-]+)*$'
-        for line in reversed(lines):
-            if re.fullmatch(command_pattern, line):
-                # Special handling for mkdir commands: remove dangerous trailing parts
-                if line.startswith("mkdir") and "rm" in line:
-                    line = line.split("rm")[0].strip()
-                # Special handling for docker commands: remove dangling or incomplete flags
-                if line.startswith("docker run") and line.endswith("-u"):
-                    line = line[:-2].strip()
-                return line
-        return None
-
-    def validate_command(self, command: str) -> bool:
-        """Enhanced validation with command structure check"""
-        if not command or len(command.strip()) == 0:
+        # Check command against whitelist
+        parts = command.split(maxsplit=1)
+        base_cmd = parts[0]
+        args = parts[1] if len(parts) > 1 else ''
+        
+        if base_cmd not in SAFE_COMMANDS:
             return False
             
-        # Basic command structure validation (now allowing dots and slashes)
-        if not re.match(r'^[\w\./-]+(?:\s+[\w\./-]+)*$', command):
-            return False
-
-        # Check for potentially dangerous patterns
-        dangerous_patterns = [
-            r'rm\s+-rf\s+[/\*]',  # Dangerous rm commands
-            r':(){ :|:& };:',     # Fork bomb
-            r'>[^>]\s*/dev/',     # Writing to device files
-            r'mkfs',              # Filesystem formatting
-            r'dd\s+if=',          # Direct disk operations
-        ]
-        
-        for pattern in dangerous_patterns:
-            if re.search(pattern, command):
-                logging.warning(f"Dangerous command pattern detected: {pattern}")
-                return False
-                
-        # Disallow multiple commands and placeholders
-        if any(char in command for char in [';', '&&', '||', '`']):
-            return False
-        if command.strip() == "<think>" or (command.startswith("<") and command.endswith(">")):
-            return False
+        # Validate arguments against pattern
+        if pattern := SAFE_COMMANDS[base_cmd]:
+            return bool(re.match(pattern, args))
             
         return True
+
+    def validate_command(self, command: str) -> bool:
+        """Validates commands against dangerous patterns"""
+        safe_pattern = r'^[\w./-]+(?:\s+(?:[\w./-]+|>>?\s*[\w./-]+))*$'
+        dangerous_patterns = [
+            r'rm\s+-[rf]{2}',
+            r'rm\s+[/*]',
+            r'>\s*/dev/',
+            r'mkfs',
+            r'dd',
+            r'chmod\s+[0-7]{4}'
+        ]
+        if not command:
+            return False
+            
+        # Allow safer patterns including redirects
+        if not re.match(safe_pattern, command):
+            return False
+
+        # Check for dangerous patterns        
+        return not any(re.search(p, command) for p in dangerous_patterns)
 
     def _add_to_history(self, prompt: str, command: str) -> None:
         """Add command to history with metadata"""
@@ -227,38 +246,40 @@ class ShellCommandGenerator:
         })
         self._save_history()
 
-    def execute_command(self, command: str) -> bool:
+    def execute_command(self, command: str, confirm_execution: bool = True) -> bool:
         """Safely execute a shell command"""
         try:
             if not self.validate_command(command):
                 return False
-                
-            confirm = Prompt.ask(
-                "\n[yellow]Do you want to execute this command?[/yellow]",
-                choices=["yes", "no"],
-                default="no"
+
+            if confirm_execution:
+                confirm = Prompt.ask(
+                    "\n[yellow]Do you want to execute this command?[/yellow]",
+                    choices=["yes", "no"],
+                    default="no"
+                )
+                if confirm.lower() != "yes":
+                    return False
+
+            console.print("\n[cyan]Executing command...[/cyan]")
+            result = subprocess.run(
+                command,
+                shell=True,
+                text=True,
+                capture_output=True
             )
             
-            if confirm.lower() == "yes":
-                console.print("\n[cyan]Executing command...[/cyan]")
-                result = subprocess.run(
-                    command,
-                    shell=True,
-                    text=True,
-                    capture_output=True
-                )
-                
-                if result.returncode == 0:
-                    console.print("[green]Command executed successfully[/green]")
-                    if result.stdout:
-                        console.print(Panel(result.stdout, title="Output", border_style="green"))
-                else:
-                    console.print("[red]Command failed[/red]")
-                    if result.stderr:
-                        console.print(Panel(result.stderr, title="Error", border_style="red"))
-                        
-                return result.returncode == 0
-                
+            if result.returncode == 0:
+                console.print("[green]Command executed successfully[/green]")
+                if result.stdout:
+                    console.print(Panel(result.stdout, title="Output", border_style="green"))
+            else:
+                console.print("[red]Command failed[/red]")
+                if result.stderr:
+                    console.print(Panel(result.stderr, title="Error", border_style="red"))
+                    
+            return result.returncode == 0
+            
         except Exception as e:
             console.print(f"[red]Error executing command: {e}[/red]")
         return False
@@ -281,7 +302,7 @@ class ShellCommandGenerator:
         # Display banner and welcome message
         console.print(f"[bold cyan]{BANNER}[/bold cyan]")
         console.print(f"[bold blue]BourguibaGPT[/bold blue] [cyan]v{VERSION}[/cyan]")
-        console.print("[dim]Powered by Ollama - Model: {self.model_name}[/dim]")
+        console.print(f"[dim]Powered by Ollama - Model: {self.model_name}[/dim]")
         console.print("\n[italic]Type 'help' for available commands or 'exit' to quit[/italic]\n")
         
         while True:
@@ -297,16 +318,25 @@ class ShellCommandGenerator:
                 elif user_input.lower() == 'history':
                     self.show_history()
                 elif user_input.lower().startswith('execute '):
-                    command = user_input[8:].strip()
+                    command = user_input[8:].trip()
                     self.execute_command(command)
                 else:
                     command = self.generate_command(user_input)
                     if command:
                         console.print(f"\n[green]Generated command:[/green]")
-                        console.print(Panel(command, style="bold white"))
+                        console.print(Panel(command["command"], style="bold white"))
                         
-                        if self.auto_execute:
-                            self.execute_command(command)
+                        choice = Prompt.ask(
+                            "\n[yellow]Type 'e' to execute the generated command and exit, or 'n' to return to the prompt:[/yellow]",
+                            choices=["e", "n"],
+                            default="n"
+                        )
+                        if choice.lower() == "e":
+                            self.execute_command(command, confirm_execution=False)
+                            console.print("[green]Exiting...[/green]")
+                            sys.exit(0)
+                        else:
+                            console.print("[blue]Continuing with a new prompt...[/blue]")
                     else:
                         console.print("[red]Failed to generate a valid command[/red]")
                         
@@ -339,15 +369,70 @@ class ShellCommandGenerator:
             box=box.DOUBLE
         ))
 
+    def _call_ollama(self, prompt: str) -> Dict[str, Any]:
+        """Call Ollama API with retry logic."""
+        context = self.get_os_info()
+        
+        message = f"""
+        Operating System: {context}
+        Generate a shell command for: {prompt}
+        Return only the command without explanation.
+        """
+        
+        data = {
+            "model": self.model_name,
+            "prompt": message,
+            "temperature": self.temperature,
+            "stream": False
+        }
+        
+        for attempt in range(self.max_retries):
+            try:
+                response = requests.post(
+                    self.ollama_api,
+                    json=data,
+                    timeout=self.timeout
+                )
+                response.raise_for_status()
+                
+                result = response.json()
+                if "response" not in result:
+                    raise ValueError("Invalid API response format")
+                    
+                command = result["response"].strip()
+                command = command.replace('```shell', '').replace('```', '').strip()
+                
+                # Remove any standalone shell prefixes from the command
+                lines = [line.strip() for line in command.splitlines()]
+                lines = [line for line in lines if line.lower() not in ["bash", "zsh", "sh"]]
+                command = " ".join(lines).strip()
+                
+                return {"command": command}
+                
+            except requests.exceptions.RequestException as e:
+                if attempt == self.max_retries - 1:
+                    raise ValueError(f"Failed to call Ollama API after {self.max_retries} attempts: {e}")
+                time.sleep(1)
+                
+        return {"command": None}
+
+# Add parameter validation to parse_arguments
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(description="Enhanced Shell Command Generator")
-    parser.add_argument("--model", default="deepseek-r1:1.5b", help="Ollama model name")
-    parser.add_argument("--temperature", type=float, default=0.7, help="Generation temperature")
+    parser.add_argument("--model", default="phi3:mini", help="Ollama model name")  # Updated default model name
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.7,
+        help="Generation temperature (0.0-1.0)",
+        choices=[x/10 for x in range(11)]  # Restrict to valid range
+    )
     parser.add_argument("--auto-execute", action="store_true", help="Auto-execute generated commands")
     parser.add_argument("--history-file", type=Path, help="Custom history file location")
     return parser.parse_args()
 
+# Enhance error handling in main
 def main() -> None:
     """Main entry point with improved error handling"""
     try:
@@ -358,10 +443,17 @@ def main() -> None:
             auto_execute=args.auto_execute,
             history_file=args.history_file
         )
-        generator.run()
+        try:
+            generator.run()
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Gracefully shutting down...[/yellow]")
+        except Exception as e:
+            console.print(f"[red]Runtime error: {e}[/red]")
+            logging.error("Runtime error", exc_info=True)
+            sys.exit(2)
     except Exception as e:
-        console.print(f"[red]Fatal error: {e}[/red]")
-        logging.error(f"Fatal error: {e}", exc_info=True)
+        console.print(f"[red]Initialization error: {e}[/red]")
+        logging.error("Initialization error", exc_info=True) 
         sys.exit(1)
 
 if __name__ == '__main__':
