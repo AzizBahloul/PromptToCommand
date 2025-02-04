@@ -1,10 +1,7 @@
-# Set the environment variable before any transformers import to disable TensorFlow.
-import os
-os.environ["TRANSFORMERS_NO_TF"] = "1"
-
 import platform
 import re
 import sys
+import os
 import logging
 import argparse
 import time
@@ -12,6 +9,11 @@ import signal
 import json
 from pathlib import Path
 from typing import Optional, List, Dict, Any
+import requests
+import subprocess
+import shutil
+from datetime import datetime
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
@@ -19,28 +21,6 @@ from rich.progress import Progress
 from rich.text import Text
 from rich.layout import Layout
 from rich import box
-import subprocess
-from datetime import datetime
-
-# Import Hugging Face transformers components
-from transformers import pipeline, set_seed
-
-# Import MODEL_CONFIG from config.py
-from .config import MODEL_CONFIG
-
-# Import model classes
-from .models import GPTNeo125M, GPTNeo1_3B, GPTNeo2_7B
-
-def get_model_download_path(model_name: str) -> Path:
-    """Get path where model files are stored."""
-    cache_dir = Path.home() / ".cache" / "bourguibagpt" / "models"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    return cache_dir / f"{model_name.replace('/', '_')}"
-
-def is_model_downloaded(model_name: str) -> bool:
-    """Check if model is already downloaded."""
-    model_path = get_model_download_path(model_name)
-    return model_path.exists()
 
 # Configure logging
 logging.basicConfig(
@@ -49,8 +29,10 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )
 
+# Initialize console for rich output
 console = Console()
 
+# Fix banner alignment
 BANNER = """
 ╔══════════════════════════════════════════════════════════════╗
 ║  ____                            _ _           ____ ____ _____ ║
@@ -62,7 +44,10 @@ BANNER = """
 ║              Your Tunisian Shell Command Assistant             ╚══════════════════════════════════════════════════════════════╝
 """
 
-VERSION = "3.0.0"
+VERSION = "2.0.0"
+
+# Import MODEL_CONFIG from config.py
+from .config import MODEL_CONFIG
 
 def get_system_memory() -> float:
     """Retrieve total system memory in GB."""
@@ -99,33 +84,68 @@ def recommend_model(system_ram: float) -> str:
     else:
         return "large"
 
+def ensure_ollama_installed() -> None:
+    """Ensure that Ollama is installed; auto-install on Linux, macOS, and Windows if not present."""
+    if shutil.which("ollama") is None:
+        console.print("[yellow]Ollama CLI not found. Installing Ollama...[/yellow]")
+        system = platform.system()
+        if system == "Linux":
+            try:
+                subprocess.run("curl -fsSL https://ollama.ai/install.sh | sh", shell=True, check=True)
+                console.print("[green]Ollama installed successfully.[/green]")
+            except Exception as e:
+                console.print(f"[red]Failed to install Ollama on Linux: {e}[/red]")
+                sys.exit(1)
+        elif system == "Darwin":
+            try:
+                subprocess.run("brew install --cask ollama", shell=True, check=True)
+                console.print("[green]Ollama installed successfully on macOS.[/green]")
+            except Exception as e:
+                console.print(f"[red]Failed to install Ollama on macOS: {e}[/red]")
+                sys.exit(1)
+        elif system == "Windows":
+            try:
+                # Using winget to install Ollama. Adjust the package ID as needed.
+                subprocess.run("winget install --id Ollama.Ollama -e", shell=True, check=True)
+                console.print("[green]Ollama installed successfully on Windows.[/green]")
+            except Exception as e:
+                console.print(f"[red]Failed to install Ollama on Windows: {e}[/red]")
+                sys.exit(1)
+        else:
+            console.print("[red]Automatic installation is only supported on Linux, macOS, and Windows. Please install Ollama manually.[/red]")
+            sys.exit(1)
+
 class ShellCommandGenerator:
-    """
-    Shell command generator that outputs a generated command.
+    """Shell command generator with enhanced safety and reliability"""
     
-    :param model_name: The model name to use
-    :param temperature: Controls randomness of the output
-    :param history_file: Path to the command history file
-    :param output_command_only: If True, prints only the command
-    """
     def __init__(
         self,
-        model_name: str,
+        model_name: str = "mistral-openorca:7b",
         temperature: float = 0.7,
+        auto_execute: bool = False,
         history_file: Optional[Path] = None,
-        output_command_only: bool = False,
+        max_retries: int = 3,
+        timeout: int = 30
     ) -> None:
+        if not isinstance(temperature, float) or not 0 <= temperature <= 1:
+            raise ValueError("Temperature must be a float between 0 and 1")
+        if not isinstance(max_retries, int) or max_retries < 1:
+            raise ValueError("max_retries must be a positive integer")
+            
         self.model_name = model_name
         self.temperature = temperature
-        self.history_file = history_file or Path.home() / ".shell_command_history.json"
+        self.auto_execute = auto_execute
+        self.max_retries = max_retries
+        self.timeout = timeout
         self.command_history: List[Dict[str, Any]] = []
-        self.output_command_only = output_command_only
-        self.max_retries = 3
-        self.timeout = 30
+        self.history_file = history_file or Path.home() / ".shell_command_history.json"
+        self.ollama_api = "http://localhost:11434/api/generate"
+        
         self._load_history()
-
+        self._check_ollama_status()
+        
     def _load_history(self) -> None:
-        """Load command history from file."""
+        """Load command history from file"""
         try:
             if self.history_file.exists():
                 with open(self.history_file, 'r') as f:
@@ -135,178 +155,149 @@ class ShellCommandGenerator:
             self.command_history = []
 
     def _save_history(self) -> None:
-        """Save command history to file."""
+        """Save command history to file"""
         try:
             with open(self.history_file, 'w') as f:
                 json.dump(self.command_history, f, indent=2)
         except Exception as e:
             logging.error(f"Failed to save history: {e}")
 
-    def _call_hf(self, prompt: str) -> Dict[str, Any]:
-        """
-        Call Hugging Face text generation pipeline to generate a shell command.
-        Returns a dict with key 'command'.
-        """
-        try:
-            from transformers import pipeline, set_seed
-
-            system_instruction = (
-                "Generate a single valid Unix shell command for the given task. "
-                "Output ONLY the command itself without any explanations, descriptions, or formatting. "
-                "The command must be properly escaped and follow POSIX standards."
-            )
-            full_prompt = f"{system_instruction}\nTask: {prompt}\nCommand:"
-
-            generator = pipeline("text-generation", model=self.model_name, device=-1)
-            set_seed(42)
-            results = generator(
-                full_prompt,
-                max_new_tokens=50,
-                num_return_sequences=1,
-                temperature=0.3,
-                top_p=0.95,
-                repetition_penalty=1.2,
-                do_sample=True,
-                clean_up_tokenization_spaces=True,
-                truncation=True
-            )
-            raw_text = results[0]["generated_text"].strip()
-
-            # Enhanced command extraction logic
-            command = None
-            command_pattern = re.compile(
-                r'(?:^|\n)'
-                r'\s*'
-                r'(?P<command>'
-                r'(?:sudo\s+)?'
-                r'(?:mkdir|cd|ls|echo|cp|mv|rm|chmod|grep|find|tar|curl|wget|git|'
-                r'\./|/[\w/\.-]+|[\w+-]+)'
-                r'(?:\s+[^\n]*)?)'
-                r'\s*$',
-                re.IGNORECASE
-            )
-
-            # First try to find command after the last "Command:" prompt
-            command_sections = re.split(r'Command:\s*', raw_text, flags=re.IGNORECASE)
-            if len(command_sections) > 1:
-                last_command_section = command_sections[-1]
-                match = command_pattern.search(last_command_section)
-                if match:
-                    command = match.group('command').split('\n')[0].strip()
-
-            # If not found, search entire text
-            if not command:
-                match = command_pattern.search(raw_text)
-                if match:
-                    command = match.group('command').split('\n')[0].strip()
-
-            # Final validation
-            if not command or not re.match(r'^\s*(sudo\s+)?[\w/\.+-]+', command):
-                raise ValueError("No valid shell command detected in response")
-
-            # Basic security check
-            dangerous_patterns = [
-                r'rm\s+-(rf|r\s+f|f\s+r)',
-                r':\(\)\{\s*:|\s*\|\s*:\s*\}\s*;',
-                r'wget\s+http://',
-                r'curl\s+http://',
-                r'\s/dev/null\s*',
-            ]
-            for pattern in dangerous_patterns:
-                if re.search(pattern, command, re.IGNORECASE):
-                    raise ValueError(f"Potentially dangerous command detected: {command}")
-
-            return {"command": command}
-        except Exception as e:
-            raise ValueError(f"Hugging Face generation error: {e}")
+    def _check_ollama_status(self) -> None:
+        """Verify Ollama is installed, running, and the selected model is available"""
+        ensure_ollama_installed()  # Ensure Ollama is installed
+        from rich.progress import Progress
+        with Progress() as progress:
+            task = progress.add_task("[cyan]Checking Ollama status...", total=1)
+            system = platform.system()
+            try:
+                response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
+                progress.update(task, advance=0.3)
+            except requests.exceptions.ConnectionError:
+                console.print("[red]Ollama service is not running.[/red]")
+                if system == "Linux":
+                    try:
+                        console.print("[yellow]Attempting to start Ollama service on Linux...[/yellow]")
+                        try:
+                            subprocess.run(["systemctl", "start", "ollama"], check=True)
+                        except subprocess.CalledProcessError:
+                            console.print("[yellow]systemctl failed, falling back to running 'ollama serve'...[/yellow]")
+                            # Run "ollama serve" in background
+                            subprocess.Popen("ollama serve", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        time.sleep(5)
+                        response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
+                        console.print("[green]Ollama service started successfully on Linux.[/green]")
+                    except Exception as e:
+                        console.print(f"[red]Failed to start Ollama service on Linux: {e}[/red]")
+                        sys.exit(1)
+                elif system == "Darwin":
+                    try:
+                        console.print("[yellow]Attempting to start Ollama service on macOS...[/yellow]")
+                        subprocess.run(["open", "-a", "Ollama"], check=True)
+                        time.sleep(5)
+                        response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
+                        console.print("[green]Ollama service started successfully on macOS.[/green]")
+                    except Exception as e:
+                        console.print(f"[red]Failed to start Ollama service on macOS: {e}[/red]")
+                        sys.exit(1)
+                elif system == "Windows":
+                    try:
+                        console.print("[yellow]Attempting to start Ollama service on Windows...[/yellow]")
+                        subprocess.run("start ollama", shell=True, check=True)
+                        time.sleep(5)
+                        response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
+                        console.print("[green]Ollama service started successfully on Windows.[/green]")
+                    except Exception as e:
+                        console.print(f"[red]Failed to start Ollama service on Windows: {e}[/red]")
+                        sys.exit(1)
+                else:
+                    console.print("[yellow]Please start the Ollama application manually.[/yellow]")
+                    sys.exit(1)
+            if response.status_code != 200:
+                raise ConnectionError("Ollama service did not respond as expected")
+            progress.update(task, advance=0.3)
+            models = response.json().get("models", [])
+            if not any(self.model_name in model.get("name", "") for model in models):
+                console.print(f"[yellow]Model {self.model_name} not found. Downloading...[/yellow]")
+                subprocess.run(["ollama", "pull", self.model_name], check=True)
+            progress.update(task, advance=0.4)
 
     def generate_command(self, prompt: str) -> Dict[str, Any]:
-        """Generate a shell command based on the given prompt using Hugging Face."""
+        """Generate shell command from user prompt."""
         try:
-            result = self._call_hf(prompt)
-            command = result.get('command', '').strip()
+            response = self._call_ollama(prompt)
+            if not response or 'command' not in response:
+                raise ValueError("Failed to generate valid command")
+            command = response['command'].strip()
             if not command:
                 raise ValueError("Generated command is empty")
-            record = {
+            result = {
                 'prompt': prompt,
                 'command': command,
                 'timestamp': datetime.now().isoformat(),
                 'success': True,
                 'error': None
             }
-            self.command_history.append(record)
+            self.command_history.append(result)
             self._save_history()
-            return record
+            return result
         except Exception as e:
-            record = {
+            error_result = {
                 'prompt': prompt,
-                'command': None,
+                'command': None, 
                 'timestamp': datetime.now().isoformat(),
                 'success': False,
                 'error': str(e)
             }
-            self.command_history.append(record)
+            self.command_history.append(error_result)
             self._save_history()
-            console.print(f"[red]Error generating command: {e}[/red]")
-            return record
+            console.print(f"[red]Error generating command: {str(e)}[/red]")
+            return error_result
 
-    def run(self) -> None:
+    def _call_ollama(self, prompt: str) -> Dict[str, Any]:
+        """Call Ollama API with retry logic."""
+        context = get_os_info()
+        message = f"""
+        Operating System: {context}
+        Generate a shell command for: {prompt}
+        Return only the command without explanation.
         """
-        If output_command_only is True, ask for a prompt, generate the command,
-        output only the command line, and exit.
-        Otherwise, proceed with interactive mode.
-        """
-        if self.output_command_only:
-            user_input = sys.stdin.read().strip()
-            result = self.generate_command(user_input)
-            if cmd := result.get("command"):
-                print(cmd.split("#")[0].split("//")[0].strip())
-            sys.exit(0)
-        else:
-            console.print(f"[bold cyan]{BANNER}[/bold cyan]")
-            console.print(f"[bold blue]BourguibaGPT[/bold blue] [cyan]v{VERSION}[/cyan]")
-            console.print(f"[dim]Powered by Hugging Face - Model: {self.model_name}[/dim]")
-            console.print("\n[italic]Type 'help' for available commands or 'exit' to quit[/italic]\n")
-        
-            while True:
-                try:
-                    user_input = Prompt.ask("\n[bold magenta]🇹🇳 BourguibaGPT[/bold magenta] [bold blue]→[/bold blue]")
-                    if user_input.lower() in ['exit', 'quit']:
-                        break
-                    elif user_input.lower() == 'help':
-                        self._show_help()
-                    elif user_input.lower() == 'history':
-                        self.show_history()
-                    elif user_input.lower().startswith('execute '):
-                        command = user_input[8:].strip()
-                        self.execute_command(command)
-                    else:
-                        result = self.generate_command(user_input)
-                        if result.get("command"):
-                            console.print(f"\n[green]Generated command:[/green]")
-                            console.print(Panel(result["command"], style="bold white"))
-                            
-                            choice = Prompt.ask(
-                                "\n[yellow]Type 'e' to execute the generated command and exit, or 'n' to return to the prompt:[/yellow]",
-                                choices=["e", "n"],
-                                default="n"
-                            )
-                            if choice.lower() == "e":
-                                self.execute_command(result["command"], confirm_execution=False)
-                                console.print("[green]Exiting...[/green]")
-                                sys.exit(0)
-                        else:
-                            console.print("[red]Failed to generate a valid command[/red]")
-                            
-                except KeyboardInterrupt:
-                    console.print("\n[yellow]Exiting...[/yellow]")
-                    break
-                except Exception as e:
-                    logging.error(f"Error in command loop: {e}")
+        data = {
+            "model": self.model_name,
+            "prompt": message,
+            "temperature": self.temperature,
+            "stream": False
+        }
+        for attempt in range(self.max_retries):
+            try:
+                response = requests.post(
+                    self.ollama_api,
+                    json=data,
+                    timeout=self.timeout
+                )
+                response.raise_for_status()
+                result = response.json()
+                if "response" not in result:
+                    raise ValueError("Invalid API response format")
+                command = result["response"].strip()
+                command = command.replace('```shell', '').replace('```', '').strip()
+                lines = [line.strip() for line in command.splitlines()]
+                lines = [line for line in lines if line.lower() not in ["bash", "zsh", "sh"]]
+                command = " ".join(lines).strip()
+                return {"command": command}
+            except requests.exceptions.RequestException as e:
+                if attempt == self.max_retries - 1:
+                    raise ValueError(f"Failed to call Ollama API after {self.max_retries} attempts: {e}")
+                time.sleep(1)
+        return {"command": None}
 
     def execute_command(self, command: str, confirm_execution: bool = True) -> bool:
-        """Safely execute a shell command with confirmation."""
+        """Safely execute a shell command"""
         try:
+            # Basic validation (can be extended)
+            safe_pattern = r'^[\w./-]+(?:\s+(?:[\w./-]+|>>?\s*[\w./-]+))*$'
+            if not re.match(safe_pattern, command):
+                console.print("[red]Command validation failed.[/red]")
+                return False
             if confirm_execution:
                 confirm = Prompt.ask(
                     "\n[yellow]Do you want to execute this command?[/yellow]",
@@ -336,7 +327,7 @@ class ShellCommandGenerator:
         return False
 
     def show_history(self, limit: int = 10) -> None:
-        """Display command history."""
+        """Display command history"""
         if not self.command_history:
             console.print("[yellow]No command history available[/yellow]")
             return
@@ -348,13 +339,13 @@ class ShellCommandGenerator:
             ))
 
     def _show_help(self) -> None:
-        """Display help information."""
+        """Display help information"""
         help_text = """[bold]Available Commands:[/bold]
         
 [cyan]help[/cyan] - Show this help message
 [cyan]history[/cyan] - Show command history
 [cyan]execute <command>[/cyan] - Execute a specific command
-[cyan]exit or quit[/cyan] - Exit BourguibaGPT
+[cyan]exit/quit[/cyan] - Exit BourguibaGPT
 
 [bold]Tips:[/bold]
 • Be specific in your command requests
@@ -369,10 +360,53 @@ class ShellCommandGenerator:
             box=box.DOUBLE
         ))
 
+    def run(self) -> None:
+        """Interactive command generation loop with enhanced features"""
+        console.print(f"[bold cyan]{BANNER}[/bold cyan]")
+        console.print(f"[bold blue]BourguibaGPT[/bold blue] [cyan]v{VERSION}[/cyan]")
+        console.print(f"[dim]Powered by Ollama - Model: {self.model_name}[/dim]")
+        console.print("\n[italic]Type 'help' for available commands or 'exit' to quit[/italic]\n")
+        
+        while True:
+            try:
+                user_input = Prompt.ask("\n[bold magenta]🇹🇳 BourguibaGPT[/bold magenta] [bold blue]→[/bold blue]")
+                if user_input.lower() in ['exit', 'quit']:
+                    break
+                elif user_input.lower() == 'help':
+                    self._show_help()
+                elif user_input.lower() == 'history':
+                    self.show_history()
+                elif user_input.lower().startswith('execute '):
+                    command = user_input[8:].trip()
+                    self.execute_command(command)
+                else:
+                    result = self.generate_command(user_input)
+                    if result.get("command"):
+                        console.print(f"\n[green]Generated command:[/green]")
+                        console.print(Panel(result["command"], style="bold white"))
+                        choice = Prompt.ask(
+                            "\n[yellow]Type 'e' to execute the generated command and exit, or 'n' to return to the prompt:[/yellow]",
+                            choices=["e", "n"],
+                            default="n"
+                        )
+                        if choice.lower() == "e":
+                            self.execute_command(result["command"], confirm_execution=False)
+                            console.print("[green]Exiting...[/green]")
+                            sys.exit(0)
+                        else:
+                            console.print("[blue]Continuing with a new prompt...[/blue]")
+                    else:
+                        console.print("[red]Failed to generate a valid command[/red]")
+            except KeyboardInterrupt:
+                console.print("\n[yellow]Exiting...[/yellow]")
+                break
+            except Exception as e:
+                logging.error(f"Error in command loop: {e}")
+
 def parse_arguments() -> argparse.Namespace:
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Enhanced Shell Command Generator using Hugging Face")
-    parser.add_argument("--model", default="mistral-openorca", help="Hugging Face model name")
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(description="Enhanced Shell Command Generator")
+    parser.add_argument("--model", default="mistral-openorca:7b", help="Ollama model name")
     parser.add_argument(
         "--temperature",
         type=float,
@@ -380,13 +414,15 @@ def parse_arguments() -> argparse.Namespace:
         help="Generation temperature (0.0-1.0)",
         choices=[x/10 for x in range(11)]
     )
+    parser.add_argument("--auto-execute", action="store_true", help="Auto-execute generated commands")
     parser.add_argument("--history-file", type=Path, help="Custom history file location")
-    parser.add_argument("--output-command-only", action="store_true", help="Output only the generated command")
     return parser.parse_args()
 
 def main() -> None:
-    """Main entry point with error handling."""
+    """Main entry point with dependency check"""
     try:
+        # Ensure Ollama is installed before proceeding.
+        ensure_ollama_installed()
         args = parse_arguments()
         system_ram = get_system_memory()
         os_info = get_os_info()
@@ -399,43 +435,33 @@ def main() -> None:
         
         console.print("\n[bold]Available Models:[/bold]")
         for key, config in MODEL_CONFIG.items():
-            downloaded = "✓" if is_model_downloaded(config["model_name"]) else " "
-            console.print(f"• {key.capitalize()} [{downloaded}]: {config['description']}")
-
+            status = "✓" if system_ram >= config["ram_threshold"] else "✗"
+            console.print(f"• {key.capitalize()} [{status}]: {config['description']}")
+        
         selected_model_key = Prompt.ask(
             "\n[bold]Select a model[/bold] (t=Tiny / m=Medium / l=Large)",
             choices=["t", "m", "l"],
             default="m"
         )
-
-        model_map = {"t": ("tiny", GPTNeo125M), "m": ("medium", GPTNeo1_3B), "l": ("large", GPTNeo2_7B)}
-        selected_model, model_class = model_map.get(selected_model_key, ("medium", GPTNeo1_3B))
+        model_map = {
+            "t": ("tiny", MODEL_CONFIG["tiny"]["model_name"]),
+            "m": ("medium", MODEL_CONFIG["medium"]["model_name"]),
+            "l": ("large", MODEL_CONFIG["large"]["model_name"])
+        }
+        selected, model_name = model_map.get(selected_model_key, ("medium", MODEL_CONFIG["medium"]["model_name"]))
         
-        model = model_class()
-        model_name = MODEL_CONFIG[selected_model]["model_name"]
-
-        if not is_model_downloaded(model_name):
-            console.print(f"\n[yellow]Downloading {model_name} model...[/yellow]")
-            model.install_model()
-            console.print("[green]Model downloaded successfully![/green]")
-        else:
-            console.print(f"\n[green]Using existing {model_name} model[/green]")
-
-        console.print("\n[yellow]Loading model...[/yellow]")
-        shell_generator = ShellCommandGenerator(
-            model_name=MODEL_CONFIG[selected_model]["model_name"],
+        console.print(f"\n[green]Using model: {model_name}[/green]")
+        generator = ShellCommandGenerator(
+            model_name=model_name,
             temperature=args.temperature,
-            history_file=args.history_file,
-            output_command_only=args.output_command_only
+            auto_execute=args.auto_execute,
+            history_file=args.history_file
         )
-        console.print("[green]Model loaded successfully![/green]")
-        
-        shell_generator.run()
-
+        generator.run()
     except Exception as e:
         console.print(f"[red]Initialization error: {e}[/red]")
         logging.error("Initialization error", exc_info=True)
         sys.exit(1)
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
