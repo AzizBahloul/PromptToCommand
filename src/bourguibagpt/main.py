@@ -8,7 +8,7 @@ import time
 import signal
 import json
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 import requests
 import subprocess
 import shutil
@@ -32,15 +32,19 @@ logging.basicConfig(
 # Initialize console for rich output
 console = Console()
 
-import time
 import sys
+import time
 import random
-from typing import List
+import shutil
+from typing import List, Tuple
 
 VERSION = "1.0.0"  # Add version constant
 
 def get_rainbow_colors() -> List[str]:
     return ['\033[91m', '\033[93m', '\033[92m', '\033[96m', '\033[94m', '\033[95m']
+
+def get_terminal_size() -> Tuple[int, int]:
+    return shutil.get_terminal_size()
 
 def clear_screen() -> None:
     sys.stdout.write('\033[2J\033[H')
@@ -59,27 +63,51 @@ BANNER = """
 """
 
 def display_animated_banner() -> None:
-    colors = get_rainbow_colors()
-    height = len(BANNER.split('\n'))
-    
-    # Scroll-in animation
-    for i in range(height + 1):
-        clear_screen()
-        color = colors[i % len(colors)]
-        lines = BANNER.split('\n')[-i:]
-        print('\n' * (height - i), end='')
-        print(f"{color}{''.join(lines)}\033[0m")
-        time.sleep(0.05)
-    
-    # Color cycling animation
-    for _ in range(10):
-        clear_screen()
-        color = colors[_ % len(colors)]
-        print(f"{color}{BANNER}\033[0m")
-        time.sleep(0.1)
+    try:
+        colors = get_rainbow_colors()
+        term_width = get_terminal_size().columns
+        lines = BANNER.split('\n')
+        banner_width = max(len(line) for line in lines if line)
+        padding = (term_width - banner_width) // 2 if term_width > banner_width else 0
+
+        # Scroll-in with glow
+        for i in range(len(lines)):
+            clear_screen()
+            color = colors[i % len(colors)]
+            bright = '\033[1m'  # Bold
+            glow = '\033[38;5;255m'  # Bright white
+            reset = '\033[0m'
+            
+            # Print with vertical scroll effect
+            print('\n' * (term_width // 4 - i), end='')
+            for j in range(i + 1):
+                if lines[j].strip():
+                    print(' ' * padding + f"{color}{bright}{glow}{lines[j]}{reset}")
+            time.sleep(0.05)
+
+        # Color cycling with pulsing borders
+        for i in range(10):
+            clear_screen()
+            color = colors[i % len(colors)]
+            intensity = '\033[1m' if i % 2 else '\033[2m'  # Alternate bright/dim
+            
+            for line in lines:
+                if line.strip():
+                    print(' ' * padding + f"{color}{intensity}{line}{reset}")
+            time.sleep(0.1)
+
+    except Exception as e:
+        # Fallback to static display
+        print(BANNER)
+
+def run() -> None:
+    """Main entry point for banner display"""
+    clear_screen()
+    display_animated_banner()
+    print(f"\nBourguibaGPT v{VERSION}\n")
 
 # Call this instead of directly printing BANNER
-display_animated_banner()
+run()
 
 # Import MODEL_CONFIG from config.py
 from .config import MODEL_CONFIG
@@ -93,7 +121,7 @@ def get_system_memory() -> float:
 def get_os_info() -> str:
     """Detect the operating system and, if Linux, the distribution."""
     os_name = platform.system()
-    if os_name == "Linux":
+    if (os_name == "Linux"):
         try:
             with open("/etc/os-release", "r") as f:
                 for line in f:
