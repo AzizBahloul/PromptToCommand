@@ -19,6 +19,9 @@ from rich import box
 import requests
 import subprocess
 from datetime import datetime
+from transformers import pipeline
+
+
 
 # Configure logging
 logging.basicConfig(
@@ -49,12 +52,13 @@ class ShellCommandGenerator:
     
     def __init__(
         self,
-        model_name: str = "mistral-openorca",
+        model_name: str = "microsoft/Phi-3.5-mini-instruct",
         temperature: float = 0.7,
         auto_execute: bool = False,
         history_file: Optional[Path] = None,
         max_retries: int = 3,
-        timeout: int = 30
+        timeout: int = 30,
+        hf_api_key: Optional[str] = "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"  # Your key here
     ) -> None:
         # Validate parameters
         if not isinstance(temperature, float) or not 0 <= temperature <= 1:
@@ -68,12 +72,29 @@ class ShellCommandGenerator:
         self.max_retries = max_retries
         self.timeout = timeout
         self.command_history: List[Dict[str, Any]] = []
-        self.ollama_api = "http://localhost:11434/api/generate"
+
+        # Use Hugging Face Inference API with the provided key.
+        self.hf_api_key = hf_api_key
+        self.api_url = f"https://api-inference.huggingface.co/models/{model_name}"
         self.history_file = history_file or Path.home() / ".shell_command_history.json"
         
-        # Load history and check Ollama status
+        # Load command history
         self._load_history()
-        self._check_ollama_status()
+        
+        # Add quantization config
+        self.model_kwargs = {
+            "device_map": "auto",
+            "load_in_4bit": True,
+            "bnb_4bit_quant_type": "nf4",
+            "bnb_4bit_use_double_quant": True
+        }
+        
+        # Initialize the Hugging Face pipeline
+        self.generator = pipeline(
+            "text-generation", 
+            model=self.model_name,
+            **self.model_kwargs
+        )
         
     def get_os_info(self) -> str:
         """Detect the operating system and, if Linux, the distribution."""
@@ -82,7 +103,7 @@ class ShellCommandGenerator:
             try:
                 with open("/etc/os-release", "r") as f:
                     for line in f:
-                        if line.startswith("PRETTY_NAME"):
+                        if (line.startswith("PRETTY_NAME")):
                             # Format: PRETTY_NAME="Ubuntu 20.04.2 LTS"
                             return line.split("=")[1].strip().strip('"')
             except Exception as e:
@@ -107,73 +128,15 @@ class ShellCommandGenerator:
         except Exception as e:
             logging.error(f"Failed to save history: {e}")
 
-    def _check_ollama_status(self) -> None:
-        """Verify Ollama is running and model is available"""
-        with Progress() as progress:
-            task = progress.add_task("[cyan]Checking Ollama status...", total=1)
-            
-            try:
-                response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
-                if response.status_code != 200:
-                    raise ConnectionError("Ollama service not running")
-                
-                progress.update(task, advance=0.5)
-                
-                models = response.json().get("models", [])
-                if not any(self.model_name in model.get("name", "") for model in models):
-                    console.print(f"[yellow]Model {self.model_name} not found. Downloading...[/yellow]")
-                    subprocess.run(["ollama", "pull", self.model_name], check=True)
-                
-                progress.update(task, advance=0.5)
-                
-            except requests.exceptions.ConnectionError:
-                console.print("[red]Error: Ollama service not running[/red]")
-                if platform.system() == "Linux":
-                    console.print("[yellow]Start Ollama with: systemctl start ollama[/yellow]")
-                else:
-                    console.print("[yellow]Please start the Ollama application[/yellow]")
-                sys.exit(1)
-            except subprocess.CalledProcessError:
-                console.print(f"[red]Failed to download model {self.model_name}[/red]")
-                sys.exit(1)
-            except Exception as e:
-                console.print(f"[red]Error checking Ollama status: {e}[/red]")
-                sys.exit(1)
-
     def generate_command(self, prompt: str) -> Dict[str, Any]:
-        """Generate shell command from user prompt."""
-        try:
-            response = self._call_ollama(prompt)
-            
-            if not response or 'command' not in response:
-                raise ValueError("Failed to generate valid command")
-                
-            command = response['command'].strip()
-            if not command:
-                raise ValueError("Generated command is empty")
-                
-            result = {
-                'prompt': prompt,
-                'command': command,
-                'timestamp': datetime.now().isoformat(),
-                'success': True,
-                'error': None
-            }
-            
-            self.command_history.append(result)
-            return result
-            
-        except Exception as e:
-            error_result = {
-                'prompt': prompt,
-                'command': None, 
-                'timestamp': datetime.now().isoformat(),
-                'success': False,
-                'error': str(e)
-            }
-            self.command_history.append(error_result)
-            print(f"Error generating command: {str(e)}")
-            return error_result
+        """Generate shell command from user prompt using Hugging Face API"""
+        response = self.generator(prompt, max_length=50, temperature=self.temperature)
+        command = response[0]["generated_text"]
+
+        # Add to history and return
+        self.command_history.append({"prompt": prompt, "command": command, "timestamp": datetime.now().isoformat()})
+        self._save_history()
+        return {"command": command}
 
     def _extract_command(self, text: str) -> Optional[str]:
         """Extract command with improved parsing"""
@@ -302,13 +265,13 @@ class ShellCommandGenerator:
         # Display banner and welcome message
         console.print(f"[bold cyan]{BANNER}[/bold cyan]")
         console.print(f"[bold blue]BourguibaGPT[/bold blue] [cyan]v{VERSION}[/cyan]")
-        console.print(f"[dim]Powered by Ollama - Model: {self.model_name}[/dim]")
+        console.print(f"[dim]Powered by Hugging Face - Model: {self.model_name}[/dim]")
         console.print("\n[italic]Type 'help' for available commands or 'exit' to quit[/italic]\n")
         
         while True:
             try:
                 user_input = Prompt.ask(
-                    "\n[bold magenta]🇹🇳 BourguibaGPT[/bold magenta] [bold blue]→[/bold blue]"
+                    "\n[bold magenta]🇹🇳 BourguibaGPT[/bold_magenta] [bold blue]→[/bold blue]"
                 )
                 
                 if user_input.lower() in ['exit', 'quit']:
@@ -318,7 +281,7 @@ class ShellCommandGenerator:
                 elif user_input.lower() == 'history':
                     self.show_history()
                 elif user_input.lower().startswith('execute '):
-                    command = user_input[8:].trip()
+                    command = user_input[8:].strip()
                     self.execute_command(command)
                 else:
                     command = self.generate_command(user_input)
@@ -332,7 +295,7 @@ class ShellCommandGenerator:
                             default="n"
                         )
                         if choice.lower() == "e":
-                            self.execute_command(command, confirm_execution=False)
+                            self.execute_command(command["command"], confirm_execution=False)
                             console.print("[green]Exiting...[/green]")
                             sys.exit(0)
                         else:
@@ -369,93 +332,11 @@ class ShellCommandGenerator:
             box=box.DOUBLE
         ))
 
-    def _call_ollama(self, prompt: str) -> Dict[str, Any]:
-        """Call Ollama API with retry logic."""
-        context = self.get_os_info()
-        
-        message = f"""
-        Operating System: {context}
-        Generate a shell command for: {prompt}
-        Return only the command without explanation.
-        """
-        
-        data = {
-            "model": self.model_name,
-            "prompt": message,
-            "temperature": self.temperature,
-            "stream": False
-        }
-        
-        for attempt in range(self.max_retries):
-            try:
-                response = requests.post(
-                    self.ollama_api,
-                    json=data,
-                    timeout=self.timeout
-                )
-                response.raise_for_status()
-                
-                result = response.json()
-                if "response" not in result:
-                    raise ValueError("Invalid API response format")
-                    
-                command = result["response"].strip()
-                command = command.replace('```shell', '').replace('```', '').strip()
-                
-                # Remove any standalone shell prefixes from the command
-                lines = [line.strip() for line in command.splitlines()]
-                lines = [line for line in lines if line.lower() not in ["bash", "zsh", "sh"]]
-                command = " ".join(lines).strip()
-                
-                return {"command": command}
-                
-            except requests.exceptions.RequestException as e:
-                if attempt == self.max_retries - 1:
-                    raise ValueError(f"Failed to call Ollama API after {self.max_retries} attempts: {e}")
-                time.sleep(1)
-                
-        return {"command": None}
-
-    def call_ollama_api(self, prompt: str) -> dict:
-        """Call Ollama API with retry logic and better error handling"""
-        for attempt in range(self.max_retries):
-            try:
-                response = requests.post(
-                    f"{self.base_url}/api/generate",
-                    json={
-                        "model": self.model,
-                        "prompt": prompt,
-                        "temperature": self.temperature
-                    },
-                    timeout=30
-                )
-                response.raise_for_status()
-                result = response.json()
-                
-                if "response" in result:
-                    command = result["response"].strip()
-                    return {"command": command}
-                else:
-                    raise ValueError("Invalid response format from Ollama API")
-                    
-            except requests.exceptions.RequestException as e:
-                if attempt == self.max_retries - 1:
-                    logging.error(f"Failed to call Ollama API: {str(e)}")
-                    return {"command": f"echo 'Error: Unable to generate command - {str(e)}'"}
-                time.sleep(1)
-                continue
-                
-            except (ValueError, KeyError) as e:
-                logging.error(f"Error parsing Ollama response: {str(e)}")
-                return {"command": f"echo 'Error: Invalid response from Ollama'"}
-        
-        return {"command": "echo 'Error: Maximum retries exceeded'"}
-
 # Add parameter validation to parse_arguments
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(description="Enhanced Shell Command Generator")
-    parser.add_argument("--model", default="mistral-openorca", help="Ollama model name")
+    parser.add_argument("--model", default="microsoft/Phi-3.5-mini-instruct", help="Hugging Face model name")
     parser.add_argument(
         "--temperature",
         type=float,
@@ -469,26 +350,147 @@ def parse_arguments() -> argparse.Namespace:
 
 # Enhance error handling in main
 def main() -> None:
-    """Main entry point with improved error handling"""
+    """Enhanced model selection with strict memory constraints"""
+    console.print("[bold cyan]Model Selection Wizard[/bold cyan]")
+    console.print("We will help you choose the most suitable model for your system.\n")
+    
+    try:
+        mem_gb = int(Prompt.ask("How many GB of system RAM do you have?", default="8"))
+        gpu = Prompt.ask("Do you have a GPU? (yes/no)", choices=["yes","no"], default="no")
+        
+        # Stricter model selection
+        if mem_gb <= 4:
+            chosen_file = "bourguibaT"  # Lightweight model for low-memory systems
+            model_to_use = "local:Phi-3.5-mini-instruct.Q4_K_M.gguf"
+        elif 4 < mem_gb <= 8:
+            chosen_file = "bourguibaM"  # Mistral for moderate memory
+            model_to_use = "mistralai/Mistral-7B-Instruct-v0.3"
+        else:
+            chosen_file = "bourguibaB"  # More powerful model for high-memory systems
+            model_to_use = "bigcode/starcoder2-7b"
+
+        # Override if specific GPU conditions exist
+        if gpu == "yes":
+            gpu_vram = int(Prompt.ask("Approximate GPU VRAM (in GB)?", default="4"))
+            if 4 <= gpu_vram <= 6:
+                chosen_file = "bourguibaB"
+                model_to_use = "mistralai/Mistral-7B-Instruct-v0.3"
+            elif gpu_vram > 6:
+                chosen_file = "bourguibaB"
+                model_to_use = "bigcode/starcoder2-7b"
+
+        console.print(f"Selected model: {model_to_use}\n")
+
+        # Rest of the function...
+    except ValueError:
+        console.print("[red]Invalid input. Defaulting to conservative model.[/red]")
+        chosen_file = "bourguibaT"
+        model_to_use = "local:Phi-3.5-mini-instruct.Q4_K_M.gguf"
+
+    # Use lower-memory models by default
+    import torch
+    torch.cuda.empty_cache()  # Clear GPU cache
+    
+    # Add explicit memory-saving configurations
+    from transformers import AutoTokenizer, AutoModelForCausalLM
+    
+    model_kwargs = {
+        "device_map": "auto",  # Distribute model across available devices
+        "load_in_4bit": True,  # Use 4-bit quantization
+        "bnb_4bit_quant_type": "nf4",  # More memory-efficient quantization
+        "bnb_4bit_compute_dtype": torch.float16,  # Use half-precision
+        "torch_dtype": torch.float16,
+        "max_memory": {
+            0: "4GB",  # Limit memory per GPU/device
+            "cpu": "8GB"  # Limit CPU memory
+        }
+    }
+
+    # Ask user about system specs to decide best model
+    console.print("[bold cyan]Model Selection Wizard[/bold cyan]")
+    console.print("We will ask some questions to figure out the best model for your system.\n")
+    mem_gb = Prompt.ask("How many GB of system RAM do you have?", default="8")
+    gpu = Prompt.ask("Do you have a GPU? (yes/no)", choices=["yes","no"], default="no")
+    gpu_vram = "0"
+    if gpu == "yes":
+        gpu_vram = Prompt.ask("Approximate GPU VRAM (in GB)?", default="4")
+
+    # Based on answers, pick a file or class
+    chosen_file = "default"
+    try:
+        mem_gb_val = int(mem_gb)
+        gpu_vram_val = int(gpu_vram)
+        if gpu == "no" and mem_gb_val <= 8:
+            chosen_file = "bourguibaT"
+        elif gpu == "yes" and 4 <= gpu_vram_val <= 6:
+            chosen_file = "bourguibaB_4_6"
+        elif gpu == "yes" and gpu_vram_val > 6:
+            chosen_file = "bourguibaB_starcoder2"
+        else:
+            # Fallback to Mistral as default if user has CPU or any GPU
+            chosen_file = "bourguibaM"
+    except:
+        chosen_file = "bourguibaM"
+
+    console.print(f"You selected: {chosen_file}\n")
+    console.print("[bold cyan]Installing required dependencies now...[/bold cyan]")
+
+    # Example install step
+    subprocess.run("pip install transformers rich requests", shell=True)
+
+    # Hypothetical: we import and install the correct model class
+    if chosen_file == "bourguibaT":
+        from bourguibaT import BourguibaT
+        t = BourguibaT()
+        t.install_model()
+    elif chosen_file.startswith("bourguibaB"):
+        from bourguibagpt.bourguibaB import BourguibaB
+        b = BourguibaB(int(gpu_vram))
+        b.install_model()
+    else:
+        from bourguibagpt.bourguibaM import BourguibaM
+        m = BourguibaM()
+        m.install_model()
+
+    # Now proceed with original logic
     try:
         args = parse_arguments()
+        
+        # Determine actual model path/name
+        model_to_use = "microsoft/Phi-3.5-mini-instruct"  # default
+        if chosen_file == "bourguibaT":
+            model_to_use = "local:Phi-3.5-mini-instruct.Q4_K_M.gguf"
+        elif chosen_file.startswith("bourguibaB"):
+            model_to_use = "bigcode/starcoder2-7b" if gpu_vram_val > 6 else "mistralai/Mistral-7B-Instruct-v0.3"
+        else:
+            model_to_use = "mistralai/Mistral-7B-Instruct-v0.3"
+
+        # Update generator initialization
         generator = ShellCommandGenerator(
-            model_name=args.model,
+            model_name=model_to_use,
             temperature=args.temperature,
             auto_execute=args.auto_execute,
             history_file=args.history_file
         )
-        try:
-            generator.run()
-        except KeyboardInterrupt:
-            console.print("\n[yellow]Gracefully shutting down...[/yellow]")
-        except Exception as e:
-            console.print(f"[red]Runtime error: {e}[/red]")
-            logging.error("Runtime error", exc_info=True)
-            sys.exit(2)
+        
+        # Add explicit memory limit check
+        import psutil
+        total_memory = psutil.virtual_memory().total / (1024 * 1024 * 1024)  # Convert to GB
+        if total_memory > 12:
+            console.print("[yellow]Warning: High memory usage detected. Consider using a lighter model.[/yellow]")
+        
+        # Force garbage collection and low memory mode
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
+        
+        generator.run()
+    except MemoryError:
+        console.print("[red]Memory allocation failed. Try a lighter model or increase system memory.[/red]")
+        sys.exit(1)
     except Exception as e:
-        console.print(f"[red]Initialization error: {e}[/red]")
-        logging.error("Initialization error", exc_info=True) 
+        console.print(f"[red]Critical error: {e}. Switching to minimal model.[/red]")
+        # Fallback to absolute minimal model
         sys.exit(1)
 
 if __name__ == '__main__':
