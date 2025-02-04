@@ -49,7 +49,7 @@ class ShellCommandGenerator:
     
     def __init__(
         self,
-        model_name: str = "phi3:mini",
+        model_name: str = "mistral-openorca",
         temperature: float = 0.7,
         auto_execute: bool = False,
         history_file: Optional[Path] = None,
@@ -416,11 +416,46 @@ class ShellCommandGenerator:
                 
         return {"command": None}
 
+    def call_ollama_api(self, prompt: str) -> dict:
+        """Call Ollama API with retry logic and better error handling"""
+        for attempt in range(self.max_retries):
+            try:
+                response = requests.post(
+                    f"{self.base_url}/api/generate",
+                    json={
+                        "model": self.model,
+                        "prompt": prompt,
+                        "temperature": self.temperature
+                    },
+                    timeout=30
+                )
+                response.raise_for_status()
+                result = response.json()
+                
+                if "response" in result:
+                    command = result["response"].strip()
+                    return {"command": command}
+                else:
+                    raise ValueError("Invalid response format from Ollama API")
+                    
+            except requests.exceptions.RequestException as e:
+                if attempt == self.max_retries - 1:
+                    logging.error(f"Failed to call Ollama API: {str(e)}")
+                    return {"command": f"echo 'Error: Unable to generate command - {str(e)}'"}
+                time.sleep(1)
+                continue
+                
+            except (ValueError, KeyError) as e:
+                logging.error(f"Error parsing Ollama response: {str(e)}")
+                return {"command": f"echo 'Error: Invalid response from Ollama'"}
+        
+        return {"command": "echo 'Error: Maximum retries exceeded'"}
+
 # Add parameter validation to parse_arguments
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(description="Enhanced Shell Command Generator")
-    parser.add_argument("--model", default="phi3:mini", help="Ollama model name")  # Updated default model name
+    parser.add_argument("--model", default="mistral-openorca", help="Ollama model name")
     parser.add_argument(
         "--temperature",
         type=float,
