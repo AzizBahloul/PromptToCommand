@@ -32,19 +32,54 @@ logging.basicConfig(
 # Initialize console for rich output
 console = Console()
 
-# Fix banner alignment
+import time
+import sys
+import random
+from typing import List
+
+VERSION = "1.0.0"  # Add version constant
+
+def get_rainbow_colors() -> List[str]:
+    return ['\033[91m', '\033[93m', '\033[92m', '\033[96m', '\033[94m', '\033[95m']
+
+def clear_screen() -> None:
+    sys.stdout.write('\033[2J\033[H')
+    sys.stdout.flush()
+
 BANNER = """
-╔══════════════════════════════════════════════════════════════╗
-║  ____                            _ _           ____ ____ _____ ║
-║ | __ ) ___  _   _ _ __ __ _ _  (_) |__   __ / ___|  _ \\_   _|║
-║ |  _ \\/ _ \\| | | | '__/ _` | | | | '_ \\ / _` | |  | |_) || |  ║
+╔═══════════════════════════════════════════════════════════════╗
+║  ____                            _ _           ____ ____ ____ ║
+║ | __ ) ___  _   _ _ __ __ _ _  (_) |__   __ / ___|  _ \_   _| ║
+║ |  _ \/ _ \| | | | '__/ _` | | | | '_ \ / _` | |  | |_) || |  ║
 ║ | |_) | (_) | |_| | | | (_| | |_| | |_) | (_| | |__| __/ | |  ║
-║ |____/\\___/ \\__,_|_|  \\__, |\\__,_|_.__/ \\__,_|\\____|_|   |_|  ║
-║                          |_|                                    ║
-║              Your Tunisian Shell Command Assistant             ╚══════════════════════════════════════════════════════════════╝
+║ |____/\___/ \__,_|_|  \__, |\__,_|_.__/ \__,_| \____|_|   |_| ║
+║                          |_|                                  ║
+║             Your Tunisian Shell Command Assistant             ║
+╚═══════════════════════════════════════════════════════════════╝
 """
 
-VERSION = "2.0.0"
+def display_animated_banner() -> None:
+    colors = get_rainbow_colors()
+    height = len(BANNER.split('\n'))
+    
+    # Scroll-in animation
+    for i in range(height + 1):
+        clear_screen()
+        color = colors[i % len(colors)]
+        lines = BANNER.split('\n')[-i:]
+        print('\n' * (height - i), end='')
+        print(f"{color}{''.join(lines)}\033[0m")
+        time.sleep(0.05)
+    
+    # Color cycling animation
+    for _ in range(10):
+        clear_screen()
+        color = colors[_ % len(colors)]
+        print(f"{color}{BANNER}\033[0m")
+        time.sleep(0.1)
+
+# Call this instead of directly printing BANNER
+display_animated_banner()
 
 # Import MODEL_CONFIG from config.py
 from .config import MODEL_CONFIG
@@ -361,7 +396,7 @@ class ShellCommandGenerator:
 
     def run(self) -> None:
         """Interactive command generation loop with enhanced features"""
-        console.print(f"[bold cyan]{BANNER}[/bold cyan]")
+        display_animated_banner()
         console.print(f"[bold blue]BourguibaGPT[/bold blue] [cyan]v{VERSION}[/cyan]")
         console.print(f"[dim]Powered by Ollama - Model: {self.model_name}[/dim]")
         console.print("\n[italic]Type 'help' for available commands or 'exit' to quit[/italic]\n")
@@ -416,6 +451,9 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--auto-execute", action="store_true", help="Auto-execute generated commands")
     parser.add_argument("--history-file", type=Path, help="Custom history file location")
     return parser.parse_args()
+
+
+VERSION = "1.0.0"
 
 def main() -> None:
     """Main entry point with dependency check"""

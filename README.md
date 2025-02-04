@@ -1,4 +1,3 @@
-
 ---
 
 **BourguibaGPT 🇹🇳**  
@@ -41,13 +40,13 @@ CLI Demo: [View Image](https://via.placeholder.com/800x400.png?text=BourguibaGPT
 Run the following command in the terminal:  
 
 `curl -fsSL https://ollama.com/install.sh | sh`  
-`ollama pull deepseek-r1:1.5b`  
+`ollama pull deepseek-r1:1.5b`
 
 **Step 2: Install BourguibaGPT**  
 
-Run the following command in the terminal:  
+Now install BourguibaGPT with:  
 
-`pip install bourguibagpt`  
+`pip install bourguibagpt`
 
 ---
 
@@ -132,4 +131,5 @@ GitHub Repository: [Visit Here](https://github.com/AzizBahloul/PromptToCommand)
 Report Issues: [Submit Here](https://github.com/AzizBahloul/PromptToCommand/issues)  
 
 ---
+```
 

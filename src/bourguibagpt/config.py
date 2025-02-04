@@ -1,18 +1,18 @@
 # Model configuration constants updated for Ollama models
 MODEL_CONFIG = {
     "tiny": {
-        "model_name": "smollm2:1.7b",
-        "ram_threshold": 8,  # GB
-        "description": "Lightweight model (Ollama: smollm2:1.7b) for systems with ≤8 GB RAM"
+        "model_name": "gemma2:2b",
+        "description": "Lightweight model suitable for systems with limited RAM (4-8GB)",
+        "ram_threshold": 6
     },
     "medium": {
         "model_name": "mistral-openorca:7b",
-        "ram_threshold": 16,  # GB
-        "description": "Balanced model (Ollama: mistral-openorca:7b) for systems with 8–16 GB RAM"
+        "description": "Balanced model for systems with moderate RAM (8-16GB)",
+        "ram_threshold": 10
     },
     "large": {
-        "model_name": "llama3.2:3b",
-        "ram_threshold": 32,  # GB
-        "description": "Powerful model (Ollama: llama3.2:3b) for systems with ≥32 GB RAM"
+        "model_name": "phi4:14b",
+        "description": "Full-size model for systems with ample RAM (16GB+)",
+        "ram_threshold": 18
     }
 }
