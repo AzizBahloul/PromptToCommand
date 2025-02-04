@@ -246,43 +246,25 @@ class ShellCommandGenerator:
         })
         self._save_history()
 
-    def execute_command(self, command: str, confirm_execution: bool = True) -> bool:
-        """Safely execute a shell command"""
+    def execute_command(self, command, confirm_execution=False):
+        # Ensure command is a string and not a command history dictionary
+        if isinstance(command, dict):
+            command = command['command']
+        elif isinstance(command, list):
+            command = " ".join(command)
+        
         try:
-            if not self.validate_command(command):
-                return False
-
-            if confirm_execution:
-                confirm = Prompt.ask(
-                    "\n[yellow]Do you want to execute this command?[/yellow]",
-                    choices=["yes", "no"],
-                    default="no"
-                )
-                if confirm.lower() != "yes":
-                    return False
-
-            console.print("\n[cyan]Executing command...[/cyan]")
             result = subprocess.run(
                 command,
                 shell=True,
-                text=True,
-                capture_output=True
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
             )
-            
-            if result.returncode == 0:
-                console.print("[green]Command executed successfully[/green]")
-                if result.stdout:
-                    console.print(Panel(result.stdout, title="Output", border_style="green"))
-            else:
-                console.print("[red]Command failed[/red]")
-                if result.stderr:
-                    console.print(Panel(result.stderr, title="Error", border_style="red"))
-                    
-            return result.returncode == 0
-            
+            console.print(result.stdout)
         except Exception as e:
             console.print(f"[red]Error executing command: {e}[/red]")
-        return False
 
     def show_history(self, limit: int = 10) -> None:
         """Display command history"""
