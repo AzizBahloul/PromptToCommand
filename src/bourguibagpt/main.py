@@ -324,7 +324,6 @@ class ShellCommandGenerator:
             return result.returncode == 0
         except Exception as e:
             console.print(f"[red]Error executing command: {e}[/red]")
-        return False
 
     def show_history(self, limit: int = 10) -> None:
         """Display command history"""
