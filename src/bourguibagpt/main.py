@@ -32,12 +32,6 @@ logging.basicConfig(
 # Initialize console for rich output
 console = Console()
 
-import sys
-import time
-import random
-import shutil
-from typing import List, Tuple
-
 VERSION = "2.0.0"  # Add version constant
 
 def get_rainbow_colors() -> List[str]:
@@ -61,8 +55,7 @@ BANNER = """
 ║             Your Tunisian Shell Command Assistant             ║
 ║                                                               ║
 ║                     Powered by Ollama AI                      ║
-
-
+╚═══════════════════════════════════════════════════════════════╝
 """
 
 def display_animated_banner() -> None:
@@ -116,7 +109,7 @@ def get_system_memory() -> float:
 def get_os_info() -> str:
     """Detect the operating system and, if Linux, the distribution."""
     os_name = platform.system()
-    if (os_name == "Linux"):
+    if os_name == "Linux":
         try:
             with open("/etc/os-release", "r") as f:
                 for line in f:
@@ -354,8 +347,6 @@ class ShellCommandGenerator:
                 time.sleep(1)
         return {"command": None}
 
-    from .validators import CommandValidator
-
     def execute_command(self, command: str, confirm_execution: bool = True) -> bool:
         """Safely execute a shell command"""
         try:
@@ -448,7 +439,7 @@ class ShellCommandGenerator:
                 elif user_input.lower() == 'history':
                     self.show_history()
                 elif user_input.lower().startswith('execute '):
-                    command = user_input[8:].trip()
+                    command = user_input[8:].strip()
                     self.execute_command(command)
                 else:
                     result = self.generate_command(user_input)
@@ -494,6 +485,8 @@ VERSION = "2.0.0"
 
 from inquirer import List, prompt
 import psutil
+import time
+from tqdm import tqdm
 
 def select_model(system_ram: float) -> str:
     """
@@ -518,6 +511,11 @@ def select_model(system_ram: float) -> str:
         }
     ]
 
+    # Simulate loading models with a progress bar
+    print("Loading models...")
+    for _ in tqdm(range(100), desc="Loading", ascii=True):
+        time.sleep(0.01)  # Simulate some work being done
+
     # Determine available RAM in GB.
     available_ram = psutil.virtual_memory().available / (1024 ** 3)
 
@@ -532,10 +530,21 @@ def select_model(system_ram: float) -> str:
         models[0]
     )
 
+    from rich.console import Console
+    from rich.text import Text
+
+    console = Console()
+
+    message = Text(f"free RAM in your pc right now: ", style="bold")
+    message.append(f"{available_ram:.1f} GB", style="bold magenta blink")
+    message.append(" | Select a model (use arrow keys):")
+
+    console.print(message)
+    
     questions = [
         List(
             'model',
-            message=f"Available RAM: {available_ram:.1f} GB | Select a model (use arrow keys):",
+            message=message,
             choices=choices,
             default=f"✓ {recommended['name']}"
         )
