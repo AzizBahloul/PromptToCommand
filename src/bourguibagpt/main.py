@@ -59,7 +59,10 @@ BANNER = """
 ║ |____/\___/ \__,_|_|  \__, |\__,_|_.__/ \__,_| \____|_|   |_| ║
 ║                          |_|                                  ║
 ║             Your Tunisian Shell Command Assistant             ║
-╚═══════════════════════════════════════════════════════════════╝
+║                                                               ║
+║                     Powered by Ollama AI                      ║
+
+
 """
 
 def display_animated_banner() -> None:
@@ -97,7 +100,6 @@ def run() -> None:
     """Main entry point for banner display"""
     clear_screen()
     display_animated_banner()
-    print(f"\nBourguibaGPT v{VERSION}\n")
 
 # Call this instead of directly printing BANNER
 run()
@@ -140,12 +142,25 @@ def recommend_model(system_ram: float) -> str:
     else:
         return "large"
 
+from .windows import install_ollama, verify_installation, start_ollama_service
+from .validators import CommandValidator
+
 def ensure_ollama_installed() -> None:
     """Ensure that Ollama is installed; auto-install on Linux, macOS, and Windows if not present."""
     if shutil.which("ollama") is None:
         console.print("[yellow]Ollama CLI not found. Installing Ollama...[/yellow]")
         system = platform.system()
-        if system == "Linux":
+        
+        if system == "Windows":
+            install_ollama()
+            if not verify_installation():
+                console.print("[red]Ollama installation failed![/red]")
+                sys.exit(1)
+            # Update PATH
+            ollama_path = Path(os.environ["LOCALAPPDATA"]) / "Programs" / "Ollama"
+            os.environ["PATH"] = f"{ollama_path};{os.environ['PATH']}"
+            
+        elif system == "Linux":
             try:
                 subprocess.run("curl -fsSL https://ollama.ai/install.sh | sh", shell=True, check=True)
                 console.print("[green]Ollama installed successfully.[/green]")
@@ -158,14 +173,6 @@ def ensure_ollama_installed() -> None:
                 console.print("[green]Ollama installed successfully on macOS.[/green]")
             except Exception as e:
                 console.print(f"[red]Failed to install Ollama on macOS: {e}[/red]")
-                sys.exit(1)
-        elif system == "Windows":
-            try:
-                # Using winget to install Ollama. Adjust the package ID as needed.
-                subprocess.run("winget install --id Ollama.Ollama -e", shell=True, check=True)
-                console.print("[green]Ollama installed successfully on Windows.[/green]")
-            except Exception as e:
-                console.print(f"[red]Failed to install Ollama on Windows: {e}[/red]")
                 sys.exit(1)
         else:
             console.print("[red]Automatic installation is only supported on Linux, macOS, and Windows. Please install Ollama manually.[/red]")
@@ -220,55 +227,55 @@ class ShellCommandGenerator:
 
     def _check_ollama_status(self) -> None:
         """Verify Ollama is installed, running, and the selected model is available"""
-        ensure_ollama_installed()  # Ensure Ollama is installed
-        from rich.progress import Progress
+        ensure_ollama_installed()
+        system = platform.system()
+        
         with Progress() as progress:
             task = progress.add_task("[cyan]Checking Ollama status...", total=1)
-            system = platform.system()
+            
             try:
                 response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
                 progress.update(task, advance=0.3)
             except requests.exceptions.ConnectionError:
                 console.print("[red]Ollama service is not running.[/red]")
-                if system == "Linux":
+                
+                if system == "Windows":
                     try:
-                        console.print("[yellow]Attempting to start Ollama service on Linux...[/yellow]")
-                        try:
-                            subprocess.run(["systemctl", "start", "ollama"], check=True)
-                        except subprocess.CalledProcessError:
-                            console.print("[yellow]systemctl failed, falling back to running 'ollama serve'...[/yellow]")
-                            # Run "ollama serve" in background
-                            subprocess.Popen("ollama serve", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                        time.sleep(5)
+                        start_ollama_service()
+                        time.sleep(10)  # Windows needs more startup time
                         response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
-                        console.print("[green]Ollama service started successfully on Linux.[/green]")
-                    except Exception as e:
-                        console.print(f"[red]Failed to start Ollama service on Linux: {e}[/red]")
-                        sys.exit(1)
-                elif system == "Darwin":
-                    try:
-                        console.print("[yellow]Attempting to start Ollama service on macOS...[/yellow]")
-                        subprocess.run(["open", "-a", "Ollama"], check=True)
-                        time.sleep(5)
-                        response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
-                        console.print("[green]Ollama service started successfully on macOS.[/green]")
-                    except Exception as e:
-                        console.print(f"[red]Failed to start Ollama service on macOS: {e}[/red]")
-                        sys.exit(1)
-                elif system == "Windows":
-                    try:
-                        console.print("[yellow]Attempting to start Ollama service on Windows...[/yellow]")
-                        # Use Popen with 'start /min ollama' to keep it running after main program exits
-                        subprocess.Popen('start /min cmd /c "ollama serve"', shell=True)
-                        time.sleep(5)
-                        response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
-                        console.print("[green]Ollama service started successfully on Windows.[/green]")
                     except Exception as e:
                         console.print(f"[red]Failed to start Ollama on Windows: {e}[/red]")
                         sys.exit(1)
                 else:
-                    console.print("[yellow]Please start the Ollama application manually.[/yellow]")
-                    sys.exit(1)
+                    if system == "Linux":
+                        try:
+                            console.print("[yellow]Attempting to start Ollama service on Linux...[/yellow]")
+                            try:
+                                subprocess.run(["systemctl", "start", "ollama"], check=True)
+                            except subprocess.CalledProcessError:
+                                console.print("[yellow]systemctl failed, falling back to running 'ollama serve'...[/yellow]")
+                                # Run "ollama serve" in background
+                                subprocess.Popen("ollama serve", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            time.sleep(5)
+                            response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
+                            console.print("[green]Ollama service started successfully on Linux.[/green]")
+                        except Exception as e:
+                            console.print(f"[red]Failed to start Ollama service on Linux: {e}[/red]")
+                            sys.exit(1)
+                    elif system == "Darwin":
+                        try:
+                            console.print("[yellow]Attempting to start Ollama service on macOS...[/yellow]")
+                            subprocess.run(["open", "-a", "Ollama"], check=True)
+                            time.sleep(5)
+                            response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
+                            console.print("[green]Ollama service started successfully on macOS.[/green]")
+                        except Exception as e:
+                            console.print(f"[red]Failed to start Ollama service on macOS: {e}[/red]")
+                            sys.exit(1)
+                    else:
+                        console.print("[yellow]Please start the Ollama application manually.[/yellow]")
+                        sys.exit(1)
             if response.status_code != 200:
                 raise ConnectionError("Ollama service did not respond as expected")
             progress.update(task, advance=0.3)
@@ -347,14 +354,17 @@ class ShellCommandGenerator:
                 time.sleep(1)
         return {"command": None}
 
+    from .validators import CommandValidator
+
     def execute_command(self, command: str, confirm_execution: bool = True) -> bool:
         """Safely execute a shell command"""
         try:
-            # Basic validation (can be extended)
-            safe_pattern = r'^[\w./-]+(?:\s+(?:[\w./-]+|>>?\s*[\w./-]+))*$'
-            if not re.match(safe_pattern, command):
-                console.print("[red]Command validation failed.[/red]")
+            # Validate command
+            is_valid, error = CommandValidator.validate(command)
+            if not is_valid:
+                console.print(f"[red]Command validation failed: {error}[/red]")
                 return False
+                
             if confirm_execution:
                 confirm = Prompt.ask(
                     "\n[yellow]Do you want to execute this command?[/yellow]",
@@ -363,6 +373,7 @@ class ShellCommandGenerator:
                 )
                 if confirm.lower() != "yes":
                     return False
+                    
             console.print("\n[cyan]Executing command...[/cyan]")
             result = subprocess.run(
                 command,
@@ -370,17 +381,21 @@ class ShellCommandGenerator:
                 text=True,
                 capture_output=True
             )
+            
             if result.returncode == 0:
                 console.print("[green]Command executed successfully[/green]")
                 if result.stdout:
                     console.print(Panel(result.stdout, title="Output", border_style="green"))
+                return True
             else:
                 console.print("[red]Command failed[/red]")
                 if result.stderr:
                     console.print(Panel(result.stderr, title="Error", border_style="red"))
-            return result.returncode == 0
+                return False
+                
         except Exception as e:
             console.print(f"[red]Error executing command: {e}[/red]")
+            return False
 
     def show_history(self, limit: int = 10) -> None:
         """Display command history"""
@@ -475,7 +490,60 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-VERSION = "1.0.0"
+VERSION = "2.0.0"
+
+from inquirer import List, prompt
+import psutil
+
+def select_model(system_ram: float) -> str:
+    """
+    Interactive model selection with system requirements check.
+    Displays the available RAM along with the prompt.
+    """
+    models = [
+        {
+            'name': 'Tiny (6GB free RAM required)',
+            'value': 'mistral:7b-instruct-v0.1-q4_0',
+            'ram': 6
+        },
+        {
+            'name': 'Medium (10GB free RAM required)',
+            'value': 'mistral-openorca:7b',
+            'ram': 8
+        },
+        {
+            'name': 'Large (20GB free RAM required)', 
+            'value': 'llama2:70b',
+            'ram': 20
+        }
+    ]
+
+    # Determine available RAM in GB.
+    available_ram = psutil.virtual_memory().available / (1024 ** 3)
+
+    # Add indicators for compatible models.
+    choices = [
+        f"{'✓' if system_ram >= m['ram'] else '✗'} {m['name']}"
+        for m in models
+    ]
+
+    recommended = next(
+        (m for m in models if system_ram >= m['ram']),
+        models[0]
+    )
+
+    questions = [
+        List(
+            'model',
+            message=f"Available RAM: {available_ram:.1f} GB | Select a model (use arrow keys):",
+            choices=choices,
+            default=f"✓ {recommended['name']}"
+        )
+    ]
+
+    answers = prompt(questions)
+    selected = answers['model'].split(' ', 1)[1]
+    return next(m['value'] for m in models if m['name'] in selected)
 
 def main() -> None:
     """Main entry point with dependency check"""
@@ -497,17 +565,9 @@ def main() -> None:
             status = "✓" if system_ram >= config["ram_threshold"] else "✗"
             console.print(f"• {key.capitalize()} [{status}]: {config['description']}")
         
-        selected_model_key = Prompt.ask(
-            "\n[bold]Select a model[/bold] (t=Tiny / m=Medium / l=Large)",
-            choices=["t", "m", "l"],
-            default="m"
-        )
-        model_map = {
-            "t": ("tiny", MODEL_CONFIG["tiny"]["model_name"]),
-            "m": ("medium", MODEL_CONFIG["medium"]["model_name"]),
-            "l": ("large", MODEL_CONFIG["large"]["model_name"])
-        }
-        selected, model_name = model_map.get(selected_model_key, ("medium", MODEL_CONFIG["medium"]["model_name"]))
+        # Use an interactive list for model selection via keyboard arrows.
+        console.print("\n[bold yellow]Please select a model using your keyboard's arrow keys:[/bold yellow]")
+        model_name = select_model(system_ram)
         
         console.print(f"\n[green]Using model: {model_name}[/green]")
         generator = ShellCommandGenerator(
