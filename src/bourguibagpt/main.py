@@ -38,7 +38,7 @@ import random
 import shutil
 from typing import List, Tuple
 
-VERSION = "1.0.0"  # Add version constant
+VERSION = "2.0.0"  # Add version constant
 
 def get_rainbow_colors() -> List[str]:
     return ['\033[91m', '\033[93m', '\033[92m', '\033[96m', '\033[94m', '\033[95m']
@@ -66,38 +66,31 @@ def display_animated_banner() -> None:
     try:
         colors = get_rainbow_colors()
         term_width = get_terminal_size().columns
-        lines = BANNER.split('\n')
+        lines = BANNER.strip('\n').split('\n')
         banner_width = max(len(line) for line in lines if line)
-        padding = (term_width - banner_width) // 2 if term_width > banner_width else 0
+        padding = max(0, (term_width - banner_width) // 2)
 
-        # Scroll-in with glow
         for i in range(len(lines)):
             clear_screen()
             color = colors[i % len(colors)]
-            bright = '\033[1m'  # Bold
-            glow = '\033[38;5;255m'  # Bright white
+            bright = '\033[1m'
+            glow = '\033[38;5;255m'
             reset = '\033[0m'
-            
-            # Print with vertical scroll effect
-            print('\n' * (term_width // 4 - i), end='')
             for j in range(i + 1):
                 if lines[j].strip():
+                    print('\n' * (1 if j == 0 else 0), end='')
                     print(' ' * padding + f"{color}{bright}{glow}{lines[j]}{reset}")
             time.sleep(0.05)
 
-        # Color cycling with pulsing borders
         for i in range(10):
             clear_screen()
             color = colors[i % len(colors)]
-            intensity = '\033[1m' if i % 2 else '\033[2m'  # Alternate bright/dim
-            
+            intensity = '\033[1m' if i % 2 else '\033[2m'
             for line in lines:
                 if line.strip():
                     print(' ' * padding + f"{color}{intensity}{line}{reset}")
             time.sleep(0.1)
-
     except Exception as e:
-        # Fallback to static display
         print(BANNER)
 
 def run() -> None:
@@ -265,12 +258,13 @@ class ShellCommandGenerator:
                 elif system == "Windows":
                     try:
                         console.print("[yellow]Attempting to start Ollama service on Windows...[/yellow]")
-                        subprocess.run("start ollama", shell=True, check=True)
+                        # Use Popen with 'start /min ollama' to keep it running after main program exits
+                        subprocess.Popen('start /min cmd /c "ollama serve"', shell=True)
                         time.sleep(5)
                         response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
                         console.print("[green]Ollama service started successfully on Windows.[/green]")
                     except Exception as e:
-                        console.print(f"[red]Failed to start Ollama service on Windows: {e}[/red]")
+                        console.print(f"[red]Failed to start Ollama on Windows: {e}[/red]")
                         sys.exit(1)
                 else:
                     console.print("[yellow]Please start the Ollama application manually.[/yellow]")
