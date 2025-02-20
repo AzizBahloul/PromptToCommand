@@ -22,6 +22,10 @@ from rich.text import Text
 from rich.layout import Layout
 from rich import box
 
+from .config import MODEL_CONFIG, load_user_preferences, save_user_preferences
+from .windows import install_ollama, verify_installation, start_ollama_service
+from .validators import CommandValidator
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -32,7 +36,7 @@ logging.basicConfig(
 # Initialize console for rich output
 console = Console()
 
-VERSION = "2.0.0"  # Add version constant
+VERSION = "2.0.0"  # Version constant
 
 def get_rainbow_colors() -> List[str]:
     return ['\033[91m', '\033[93m', '\033[92m', '\033[96m', '\033[94m', '\033[95m']
@@ -65,7 +69,6 @@ def display_animated_banner() -> None:
         lines = BANNER.strip('\n').split('\n')
         banner_width = max(len(line) for line in lines if line)
         padding = max(0, (term_width - banner_width) // 2)
-
         for i in range(len(lines)):
             clear_screen()
             color = colors[i % len(colors)]
@@ -74,10 +77,8 @@ def display_animated_banner() -> None:
             reset = '\033[0m'
             for j in range(i + 1):
                 if lines[j].strip():
-                    print('\n' * (1 if j == 0 else 0), end='')
                     print(' ' * padding + f"{color}{bright}{glow}{lines[j]}{reset}")
             time.sleep(0.05)
-
         for i in range(10):
             clear_screen()
             color = colors[i % len(colors)]
@@ -94,11 +95,35 @@ def run() -> None:
     clear_screen()
     display_animated_banner()
 
-# Call this instead of directly printing BANNER
-run()
-
-# Import MODEL_CONFIG from config.py
-from .config import MODEL_CONFIG
+# Ensure Ollama is installed before proceeding
+def ensure_ollama_installed() -> None:
+    if shutil.which("ollama") is None:
+        console.print("[yellow]Ollama CLI not found. Installing Ollama...[/yellow]")
+        system = platform.system()
+        if system == "Windows":
+            install_ollama()
+            if not verify_installation():
+                console.print("[red]Ollama installation failed![/red]")
+                sys.exit(1)
+            ollama_path = Path(os.environ["LOCALAPPDATA"]) / "Programs" / "Ollama"
+            os.environ["PATH"] = f"{ollama_path};{os.environ['PATH']}"
+        elif system == "Linux":
+            try:
+                subprocess.run("curl -fsSL https://ollama.ai/install.sh | sh", shell=True, check=True)
+                console.print("[green]Ollama installed successfully.[/green]")
+            except Exception as e:
+                console.print(f"[red]Failed to install Ollama on Linux: {e}[/red]")
+                sys.exit(1)
+        elif system == "Darwin":
+            try:
+                subprocess.run("brew install --cask ollama", shell=True, check=True)
+                console.print("[green]Ollama installed successfully on macOS.[/green]")
+            except Exception as e:
+                console.print(f"[red]Failed to install Ollama on macOS: {e}[/red]")
+                sys.exit(1)
+        else:
+            console.print("[red]Automatic installation is only supported on Linux, macOS, and Windows. Please install Ollama manually.[/red]")
+            sys.exit(1)
 
 def get_system_memory() -> float:
     """Retrieve total system memory in GB."""
@@ -122,7 +147,6 @@ def get_os_info() -> str:
 def recommend_model(system_ram: float) -> str:
     """
     Recommend a model key based on available RAM.
-    
     :param system_ram: The amount of system RAM in GB
     :return: Model key recommendation (tiny, medium, large)
     """
@@ -135,41 +159,35 @@ def recommend_model(system_ram: float) -> str:
     else:
         return "large"
 
-from .windows import install_ollama, verify_installation, start_ollama_service
-from .validators import CommandValidator
-
-def ensure_ollama_installed() -> None:
-    """Ensure that Ollama is installed; auto-install on Linux, macOS, and Windows if not present."""
-    if shutil.which("ollama") is None:
-        console.print("[yellow]Ollama CLI not found. Installing Ollama...[/yellow]")
-        system = platform.system()
-        
-        if system == "Windows":
-            install_ollama()
-            if not verify_installation():
-                console.print("[red]Ollama installation failed![/red]")
-                sys.exit(1)
-            # Update PATH
-            ollama_path = Path(os.environ["LOCALAPPDATA"]) / "Programs" / "Ollama"
-            os.environ["PATH"] = f"{ollama_path};{os.environ['PATH']}"
-            
-        elif system == "Linux":
-            try:
-                subprocess.run("curl -fsSL https://ollama.ai/install.sh | sh", shell=True, check=True)
-                console.print("[green]Ollama installed successfully.[/green]")
-            except Exception as e:
-                console.print(f"[red]Failed to install Ollama on Linux: {e}[/red]")
-                sys.exit(1)
-        elif system == "Darwin":
-            try:
-                subprocess.run("brew install --cask ollama", shell=True, check=True)
-                console.print("[green]Ollama installed successfully on macOS.[/green]")
-            except Exception as e:
-                console.print(f"[red]Failed to install Ollama on macOS: {e}[/red]")
-                sys.exit(1)
-        else:
-            console.print("[red]Automatic installation is only supported on Linux, macOS, and Windows. Please install Ollama manually.[/red]")
-            sys.exit(1)
+def select_model(system_ram: float) -> str:
+    """Interactive model selection with saved preference"""
+    # Prepare models list from config
+    models = []
+    for key, config in MODEL_CONFIG.items():
+        models.append({
+            'name': key.capitalize(),
+            'model_name': config['model_name'],
+            'ram': config['ram_threshold'],
+            'description': config['description']
+        })
+    prefs = load_user_preferences()
+    saved_model = prefs.get("preferred_model")
+    default_index = 0
+    if saved_model:
+        for i, m in enumerate(models):
+            if m['model_name'] == saved_model:
+                default_index = i
+                break
+    console.print("[bold]Available Models:[/bold]")
+    for i, model in enumerate(models):
+        status = "✓" if system_ram >= model['ram'] else "✗"
+        console.print(f"{i+1}. {status} {model['name']} ({model['model_name']})")
+    choice = Prompt.ask(
+        "\n[bold cyan]Select model[/bold cyan] (number)",
+        choices=[str(i+1) for i in range(len(models))],
+        default=str(default_index+1)
+    )
+    return models[int(choice)-1]['model_name']
 
 class ShellCommandGenerator:
     """Shell command generator with enhanced safety and reliability"""
@@ -187,7 +205,6 @@ class ShellCommandGenerator:
             raise ValueError("Temperature must be a float between 0 and 1")
         if not isinstance(max_retries, int) or max_retries < 1:
             raise ValueError("max_retries must be a positive integer")
-            
         self.model_name = model_name
         self.temperature = temperature
         self.auto_execute = auto_execute
@@ -196,7 +213,6 @@ class ShellCommandGenerator:
         self.command_history: List[Dict[str, Any]] = []
         self.history_file = history_file or Path.home() / ".shell_command_history.json"
         self.ollama_api = "http://localhost:11434/api/generate"
-        
         self._load_history()
         self._check_ollama_status()
         
@@ -222,20 +238,17 @@ class ShellCommandGenerator:
         """Verify Ollama is installed, running, and the selected model is available"""
         ensure_ollama_installed()
         system = platform.system()
-        
         with Progress() as progress:
             task = progress.add_task("[cyan]Checking Ollama status...", total=1)
-            
             try:
                 response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
                 progress.update(task, advance=0.3)
             except requests.exceptions.ConnectionError:
                 console.print("[red]Ollama service is not running.[/red]")
-                
                 if system == "Windows":
                     try:
                         start_ollama_service()
-                        time.sleep(10)  # Windows needs more startup time
+                        time.sleep(10)
                         response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
                     except Exception as e:
                         console.print(f"[red]Failed to start Ollama on Windows: {e}[/red]")
@@ -248,7 +261,6 @@ class ShellCommandGenerator:
                                 subprocess.run(["systemctl", "start", "ollama"], check=True)
                             except subprocess.CalledProcessError:
                                 console.print("[yellow]systemctl failed, falling back to running 'ollama serve'...[/yellow]")
-                                # Run "ollama serve" in background
                                 subprocess.Popen("ollama serve", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                             time.sleep(5)
                             response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
@@ -300,7 +312,7 @@ class ShellCommandGenerator:
         except Exception as e:
             error_result = {
                 'prompt': prompt,
-                'command': None, 
+                'command': None,
                 'timestamp': datetime.now().isoformat(),
                 'success': False,
                 'error': str(e)
@@ -350,12 +362,10 @@ class ShellCommandGenerator:
     def execute_command(self, command: str, confirm_execution: bool = True) -> bool:
         """Safely execute a shell command"""
         try:
-            # Validate command
             is_valid, error = CommandValidator.validate(command)
             if not is_valid:
                 console.print(f"[red]Command validation failed: {error}[/red]")
                 return False
-                
             if confirm_execution:
                 confirm = Prompt.ask(
                     "\n[yellow]Do you want to execute this command?[/yellow]",
@@ -364,7 +374,6 @@ class ShellCommandGenerator:
                 )
                 if confirm.lower() != "yes":
                     return False
-                    
             console.print("\n[cyan]Executing command...[/cyan]")
             result = subprocess.run(
                 command,
@@ -372,7 +381,6 @@ class ShellCommandGenerator:
                 text=True,
                 capture_output=True
             )
-            
             if result.returncode == 0:
                 console.print("[green]Command executed successfully[/green]")
                 if result.stdout:
@@ -383,7 +391,6 @@ class ShellCommandGenerator:
                 if result.stderr:
                     console.print(Panel(result.stderr, title="Error", border_style="red"))
                 return False
-                
         except Exception as e:
             console.print(f"[red]Error executing command: {e}[/red]")
             return False
@@ -404,17 +411,18 @@ class ShellCommandGenerator:
         """Display help information"""
         help_text = """[bold]Available Commands:[/bold]
         
-[cyan]help[/cyan] - Show this help message
-[cyan]history[/cyan] - Show command history
+[cyan]help[/cyan]         - Show this help message
+[cyan]history[/cyan]      - Show command history
 [cyan]execute <command>[/cyan] - Execute a specific command
-[cyan]exit/quit[/cyan] - Exit BourguibaGPT
+[cyan]model[/cyan] or [cyan]sibourguiba[/cyan] - Change the selected model
+[cyan]exit/quit[/cyan]    - Exit BourguibaGPT
 
 [bold]Tips:[/bold]
 • Be specific in your command requests
 • Use natural language to describe what you want to do
 • Commands are validated for safety
 • History is saved automatically
-        """
+    """
         console.print(Panel(
             help_text,
             title="[bold]BourguibaGPT Help[/bold]",
@@ -423,12 +431,14 @@ class ShellCommandGenerator:
         ))
 
     def run(self) -> None:
-        """Interactive command generation loop with enhanced features"""
+        """Interactive command generation loop with enhanced features and model change command"""
         display_animated_banner()
         console.print(f"[bold blue]BourguibaGPT[/bold blue] [cyan]v{VERSION}[/cyan]")
         console.print(f"[dim]Powered by Ollama - Model: {self.model_name}[/dim]")
         console.print("\n[italic]Type 'help' for available commands or 'exit' to quit[/italic]\n")
+        console.print("[yellow]Tip: You can change the model anytime by typing 'sibourguiba'.[/yellow]")
         
+        system_ram = get_system_memory()
         while True:
             try:
                 user_input = Prompt.ask("\n[bold magenta]🇹🇳 BourguibaGPT[/bold magenta] [bold blue]→[/bold blue]")
@@ -438,6 +448,14 @@ class ShellCommandGenerator:
                     self._show_help()
                 elif user_input.lower() == 'history':
                     self.show_history()
+                
+                # Change model if user types "model" or "sibourguiba"
+                elif user_input.lower() in ['model', 'sibourguiba']:
+                    new_model = select_model(system_ram)
+                    save_user_preferences(new_model)
+                    self.model_name = new_model
+                    console.print(f"[green]Model changed to {new_model}[/green]")
+                    self._check_ollama_status()
                 elif user_input.lower().startswith('execute '):
                     command = user_input[8:].strip()
                     self.execute_command(command)
@@ -478,95 +496,38 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument("--auto-execute", action="store_true", help="Auto-execute generated commands")
     parser.add_argument("--history-file", type=Path, help="Custom history file location")
+    parser.add_argument("--change-model", action="store_true", 
+                        help="Change and save a new model preference")
     return parser.parse_args()
 
-
-VERSION = "2.0.0"
-
-from inquirer import List, prompt
-import psutil
-import time
-from tqdm import tqdm
-
-def select_model(system_ram: float) -> str:
-    """
-    Interactive model selection with system requirements check.
-    Displays the available RAM along with the prompt.
-    """
-    models = [
-        {
-            'name': 'Tiny (6GB free RAM required)',
-            'value': 'mistral:7b-instruct-v0.1-q4_0',
-            'ram': 6
-        },
-        {
-            'name': 'Medium (10GB free RAM required)',
-            'value': 'mistral-openorca:7b',
-            'ram': 8
-        },
-        {
-            'name': 'Large (20GB free RAM required)', 
-            'value': 'llama2:70b',
-            'ram': 20
-        }
-    ]
-
-    # Simulate loading models with a progress bar
-    print("Loading models...")
-    for _ in tqdm(range(100), desc="Loading", ascii=True):
-        time.sleep(0.01)  # Simulate some work being done
-
-    # Determine available RAM in GB.
-    available_ram = psutil.virtual_memory().available / (1024 ** 3)
-
-    # Add indicators for compatible models.
-    choices = [
-        f"{'✓' if system_ram >= m['ram'] else '✗'} {m['name']}"
-        for m in models
-    ]
-
-    recommended = next(
-        (m for m in models if system_ram >= m['ram']),
-        models[0]
-    )
-
-    from rich.console import Console
-    from rich.text import Text
-
-    console = Console()
-
-    message = Text(f"free RAM in your pc right now: ", style="bold")
-    message.append(f"{available_ram:.1f} GB", style="bold magenta blink")
-    message.append(" | Select a model (use arrow keys):")
-
-    console.print(message)
-    
-    questions = [
-        List(
-            'model',
-            message=message,
-            choices=choices,
-            default=f"✓ {recommended['name']}"
-        )
-    ]
-
-    answers = prompt(questions)
-    selected = answers['model'].split(' ', 1)[1]
-    return next(m['value'] for m in models if m['name'] in selected)
-
 def main() -> None:
-    """Main entry point with dependency check"""
+    """Main entry point with model memory feature"""
     try:
-        # Ensure Ollama is installed before proceeding.
         ensure_ollama_installed()
         args = parse_arguments()
         system_ram = get_system_memory()
         os_info = get_os_info()
-        recommended = recommend_model(system_ram)
         
+        # Load saved preferences
+        prefs = load_user_preferences()
+        saved_model = prefs.get("preferred_model")
+
+        # Model selection logic
+        if args.change_model or not saved_model:
+            model_name = select_model(system_ram)
+            save_user_preferences(model_name)
+        elif args.model:
+            model_name = args.model
+            save_user_preferences(model_name)
+        else:
+            model_name = saved_model
+            console.print(f"[green]Using saved model: {model_name}[/green]")
+            console.print("[yellow]Use '--change-model' to switch models[/yellow]")
+
         console.print(f"[bold cyan]System Information:[/bold cyan]")
         console.print(f"• OS: {os_info}")
         console.print(f"• RAM: {system_ram:.1f} GB")
+        recommended = recommend_model(system_ram)
         console.print(f"• Recommended Model: {MODEL_CONFIG[recommended]['description']}")
         
         console.print("\n[bold]Available Models:[/bold]")
@@ -574,11 +535,7 @@ def main() -> None:
             status = "✓" if system_ram >= config["ram_threshold"] else "✗"
             console.print(f"• {key.capitalize()} [{status}]: {config['description']}")
         
-        # Use an interactive list for model selection via keyboard arrows.
-        console.print("\n[bold yellow]Please select a model using your keyboard's arrow keys:[/bold yellow]")
-        model_name = select_model(system_ram)
-        
-        console.print(f"\n[green]Using model: {model_name}[/green]")
+        console.print("\n[bold yellow]Please select a model using your keyboard's arrow keys if needed:[/bold yellow]")
         generator = ShellCommandGenerator(
             model_name=model_name,
             temperature=args.temperature,
