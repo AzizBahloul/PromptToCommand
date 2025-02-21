@@ -1,4 +1,5 @@
 import re
+import logging
 from typing import Tuple
 
 class CommandValidator:
@@ -6,7 +7,10 @@ class CommandValidator:
     
     SAFE_COMMANDS = {
         'mkdir', 'ls', 'cd', 'pwd', 'cp', 'mv', 'rm', 'touch',
-        'cat', 'echo', 'grep', 'find', 'head', 'tail'
+        'cat', 'echo', 'grep', 'find', 'head', 'tail', 'chmod',
+        'chown', 'ln', 'ps', 'kill', 'df', 'du', 'tar', 'gzip',
+        'gunzip', 'bzip2', 'bunzip2', 'zip', 'unzip', 'ping',
+        'curl', 'wget', 'scp', 'ssh', 'rsync'
     }
     
     @classmethod
@@ -24,12 +28,14 @@ class CommandValidator:
         
         # Check if base command is in whitelist
         if base_cmd not in cls.SAFE_COMMANDS:
+            logging.warning(f"Command '{base_cmd}' not in allowed list")
             return False, f"Command '{base_cmd}' not in allowed list"
             
         # Basic argument validation
-        safe_pattern = r'^[a-zA-Z0-9_\-./]+$'
+        safe_pattern = r'^[a-zA-Z0-9_\-./:]+$'
         for arg in parts[1:]:
             if not re.match(safe_pattern, arg):
+                logging.warning(f"Invalid argument format: {arg}")
                 return False, f"Invalid argument format: {arg}"
                 
         return True, ""

@@ -45,8 +45,7 @@ def get_terminal_size() -> Tuple[int, int]:
     return shutil.get_terminal_size()
 
 def clear_screen() -> None:
-    sys.stdout.write('\033[2J\033[H')
-    sys.stdout.flush()
+    console.clear()
 
 BANNER = """
 ╔═══════════════════════════════════════════════════════════════╗
@@ -59,35 +58,40 @@ BANNER = """
 ║             Your Tunisian Shell Command Assistant             ║
 ║                                                               ║
 ║                     Powered by Ollama AI                      ║
-╚═══════════════════════════════════════════════════════════════╝
+ ═══════════════════════════════════════════════════════════════╝
 """
 
 def display_animated_banner() -> None:
+    # ANSI escape codes constants
+    BRIGHT = '\033[1m'
+    GLOW = '\033[38;5;255m'
+    RESET = '\033[0m'
     try:
         colors = get_rainbow_colors()
         term_width = get_terminal_size().columns
         lines = BANNER.strip('\n').split('\n')
+        # Calculate banner width and center it
         banner_width = max(len(line) for line in lines if line)
         padding = max(0, (term_width - banner_width) // 2)
+        # Animate banner appearance line by line
         for i in range(len(lines)):
             clear_screen()
             color = colors[i % len(colors)]
-            bright = '\033[1m'
-            glow = '\033[38;5;255m'
-            reset = '\033[0m'
             for j in range(i + 1):
                 if lines[j].strip():
-                    print(' ' * padding + f"{color}{bright}{glow}{lines[j]}{reset}")
+                    print(' ' * padding + f"{color}{BRIGHT}{GLOW}{lines[j]}{RESET}")
             time.sleep(0.05)
+        # Animate banner glow effect
         for i in range(10):
             clear_screen()
             color = colors[i % len(colors)]
-            intensity = '\033[1m' if i % 2 else '\033[2m'
+            intensity = BRIGHT if i % 2 else '\033[2m'
             for line in lines:
                 if line.strip():
-                    print(' ' * padding + f"{color}{intensity}{line}{reset}")
+                    print(' ' * padding + f"{color}{intensity}{line}{RESET}")
             time.sleep(0.1)
     except Exception as e:
+        logging.exception("Error during banner animation")
         print(BANNER)
 
 def run() -> None:
@@ -95,8 +99,8 @@ def run() -> None:
     clear_screen()
     display_animated_banner()
 
-# Ensure Ollama is installed before proceeding
 def ensure_ollama_installed() -> None:
+    """Ensure Ollama is installed before proceeding"""
     if shutil.which("ollama") is None:
         console.print("[yellow]Ollama CLI not found. Installing Ollama...[/yellow]")
         system = platform.system()
@@ -161,7 +165,6 @@ def recommend_model(system_ram: float) -> str:
 
 def select_model(system_ram: float) -> str:
     """Interactive model selection with saved preference"""
-    # Prepare models list from config
     models = []
     for key, config in MODEL_CONFIG.items():
         models.append({
@@ -188,6 +191,19 @@ def select_model(system_ram: float) -> str:
         default=str(default_index+1)
     )
     return models[int(choice)-1]['model_name']
+
+def is_gpu_available() -> bool:
+    """Check if NVIDIA GPU is available using nvidia-smi"""
+    try:
+        subprocess.run(
+            ["nvidia-smi"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True
+        )
+        return True
+    except Exception:
+        return False
 
 class ShellCommandGenerator:
     """Shell command generator with enhanced safety and reliability"""
@@ -223,7 +239,7 @@ class ShellCommandGenerator:
                 with open(self.history_file, 'r') as f:
                     self.command_history = json.load(f)
         except Exception as e:
-            logging.warning(f"Failed to load history: {e}")
+            logging.exception("Failed to load history")
             self.command_history = []
 
     def _save_history(self) -> None:
@@ -232,11 +248,17 @@ class ShellCommandGenerator:
             with open(self.history_file, 'w') as f:
                 json.dump(self.command_history, f, indent=2)
         except Exception as e:
-            logging.error(f"Failed to save history: {e}")
+            logging.exception("Failed to save history")
 
     def _check_ollama_status(self) -> None:
         """Verify Ollama is installed, running, and the selected model is available"""
         ensure_ollama_installed()
+        # Display GPU detection status
+        if is_gpu_available():
+            console.print("[green]GPU detected.[/green]")
+        else:
+            console.print("[yellow]No GPU detected.[/yellow]")
+        
         system = platform.system()
         with Progress() as progress:
             task = progress.add_task("[cyan]Checking Ollama status...", total=1)
@@ -253,34 +275,34 @@ class ShellCommandGenerator:
                     except Exception as e:
                         console.print(f"[red]Failed to start Ollama on Windows: {e}[/red]")
                         sys.exit(1)
-                else:
-                    if system == "Linux":
+                elif system == "Linux":
+                    try:
+                        console.print("[yellow]Attempting to start Ollama service on Linux...[/yellow]")
                         try:
-                            console.print("[yellow]Attempting to start Ollama service on Linux...[/yellow]")
-                            try:
-                                subprocess.run(["systemctl", "start", "ollama"], check=True)
-                            except subprocess.CalledProcessError:
-                                console.print("[yellow]systemctl failed, falling back to running 'ollama serve'...[/yellow]")
-                                subprocess.Popen("ollama serve", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                            time.sleep(5)
-                            response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
-                            console.print("[green]Ollama service started successfully on Linux.[/green]")
-                        except Exception as e:
-                            console.print(f"[red]Failed to start Ollama service on Linux: {e}[/red]")
-                            sys.exit(1)
-                    elif system == "Darwin":
-                        try:
-                            console.print("[yellow]Attempting to start Ollama service on macOS...[/yellow]")
-                            subprocess.run(["open", "-a", "Ollama"], check=True)
-                            time.sleep(5)
-                            response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
-                            console.print("[green]Ollama service started successfully on macOS.[/green]")
-                        except Exception as e:
-                            console.print(f"[red]Failed to start Ollama service on macOS: {e}[/red]")
-                            sys.exit(1)
-                    else:
-                        console.print("[yellow]Please start the Ollama application manually.[/yellow]")
+                            subprocess.run(["systemctl", "start", "ollama"], check=True)
+                        except subprocess.CalledProcessError:
+                            console.print("[yellow]systemctl failed, running 'ollama serve'...[/yellow]")
+                            serve_cmd = "ollama serve --gpu" if is_gpu_available() else "ollama serve"
+                            subprocess.Popen(serve_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        time.sleep(5)
+                        response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
+                        console.print("[green]Ollama service started successfully on Linux.[/green]")
+                    except Exception as e:
+                        console.print(f"[red]Failed to start Ollama service on Linux: {e}[/red]")
                         sys.exit(1)
+                elif system == "Darwin":
+                    try:
+                        console.print("[yellow]Attempting to start Ollama service on macOS...[/yellow]")
+                        subprocess.run(["open", "-a", "Ollama"], check=True)
+                        time.sleep(5)
+                        response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
+                        console.print("[green]Ollama service started successfully on macOS.[/green]")
+                    except Exception as e:
+                        console.print(f"[red]Failed to start Ollama service on macOS: {e}[/red]")
+                        sys.exit(1)
+                else:
+                    console.print("[yellow]Please start the Ollama application manually.[/yellow]")
+                    sys.exit(1)
             if response.status_code != 200:
                 raise ConnectionError("Ollama service did not respond as expected")
             progress.update(task, advance=0.3)
@@ -310,6 +332,7 @@ class ShellCommandGenerator:
             self._save_history()
             return result
         except Exception as e:
+            logging.exception("Error generating command")
             error_result = {
                 'prompt': prompt,
                 'command': None,
@@ -323,13 +346,23 @@ class ShellCommandGenerator:
             return error_result
 
     def _call_ollama(self, prompt: str) -> Dict[str, Any]:
-        """Call Ollama API with retry logic."""
+        """Call Ollama API with retry logic, refined prompt, and improved output instructions."""
         context = get_os_info()
+        examples = """
+Examples of valid commands:
+1) ls -la
+2) grep 'pattern' file.txt
+3) tar -czf archive.tar.gz folder/
+4) docker build -t image:latest .
+"""
         message = f"""
-        Operating System: {context}
-        Generate a shell command for: {prompt}
-        Return only the command without explanation.
-        """
+Operating System: {context}
+You are a shell command generator that should return only the command.
+No extra text.
+
+User prompt: {prompt}
+{examples}
+"""
         data = {
             "model": self.model_name,
             "prompt": message,
@@ -347,6 +380,7 @@ class ShellCommandGenerator:
                 result = response.json()
                 if "response" not in result:
                     raise ValueError("Invalid API response format")
+                # Clean up the command output
                 command = result["response"].strip()
                 command = command.replace('```shell', '').replace('```', '').strip()
                 lines = [line.strip() for line in command.splitlines()]
@@ -354,13 +388,14 @@ class ShellCommandGenerator:
                 command = " ".join(lines).strip()
                 return {"command": command}
             except requests.exceptions.RequestException as e:
+                logging.warning(f"Ollama API call attempt {attempt+1} failed: {e}")
                 if attempt == self.max_retries - 1:
                     raise ValueError(f"Failed to call Ollama API after {self.max_retries} attempts: {e}")
                 time.sleep(1)
         return {"command": None}
 
     def execute_command(self, command: str, confirm_execution: bool = True) -> bool:
-        """Safely execute a shell command"""
+        """Safely execute a shell command with validation, feedback, and improved output."""
         try:
             is_valid, error = CommandValidator.validate(command)
             if not is_valid:
@@ -385,6 +420,13 @@ class ShellCommandGenerator:
                 console.print("[green]Command executed successfully[/green]")
                 if result.stdout:
                     console.print(Panel(result.stdout, title="Output", border_style="green"))
+                feedback = Prompt.ask(
+                    "\n[yellow]Rate the command success on a scale of 1-5 (1=poor, 5=excellent):[/yellow]",
+                    choices=["1", "2", "3", "4", "5"],
+                    default="3"
+                )
+                self.command_history[-1]['feedback'] = feedback
+                self._save_history()
                 return True
             else:
                 console.print("[red]Command failed[/red]")
@@ -392,6 +434,7 @@ class ShellCommandGenerator:
                     console.print(Panel(result.stderr, title="Error", border_style="red"))
                 return False
         except Exception as e:
+            logging.exception("Error during command execution")
             console.print(f"[red]Error executing command: {e}[/red]")
             return False
 
@@ -411,11 +454,11 @@ class ShellCommandGenerator:
         """Display help information"""
         help_text = """[bold]Available Commands:[/bold]
         
-[cyan]help[/cyan]         - Show this help message
-[cyan]history[/cyan]      - Show command history
+[cyan]help[/cyan]          - Show this help message
+[cyan]history[/cyan]       - Show command history
 [cyan]execute <command>[/cyan] - Execute a specific command
-[cyan]model[/cyan] or [cyan]sibourguiba[/cyan] - Change the selected model
-[cyan]exit/quit[/cyan]    - Exit BourguibaGPT
+[cyan]model[/cyan]/[cyan]sibourguiba[/cyan] - Change the selected model
+[cyan]exit[/cyan]/[cyan]quit[/cyan]    - Exit BourguibaGPT
 
 [bold]Tips:[/bold]
 • Be specific in your command requests
@@ -431,25 +474,32 @@ class ShellCommandGenerator:
         ))
 
     def run(self) -> None:
-        """Interactive command generation loop with enhanced features and model change command"""
+        """Interactive command generation loop with enhanced features and model change command."""
         display_animated_banner()
         console.print(f"[bold blue]BourguibaGPT[/bold blue] [cyan]v{VERSION}[/cyan]")
         console.print(f"[dim]Powered by Ollama - Model: {self.model_name}[/dim]")
-        console.print("\n[italic]Type 'help' for available commands or 'exit' to quit[/italic]\n")
+        console.print("\n[italic]Type 'help' for commands or 'exit' to quit[/italic]\n")
         console.print("[yellow]Tip: You can change the model anytime by typing 'sibourguiba'.[/yellow]")
+        
+        # Add GPU detection status here
+        if is_gpu_available():
+            console.print("[green]GPU detected: Your system has an NVIDIA GPU.[/green]")
+        else:
+            console.print("[yellow]No GPU detected: Falling back to CPU mode.[/yellow]")
         
         system_ram = get_system_memory()
         while True:
             try:
                 user_input = Prompt.ask("\n[bold magenta]🇹🇳 BourguibaGPT[/bold magenta] [bold blue]→[/bold blue]")
+                if not user_input.strip():
+                    console.print("[yellow]No input received. Please type a command or 'help'.[/yellow]")
+                    continue
                 if user_input.lower() in ['exit', 'quit']:
-                    break
+                    raise SystemExit
                 elif user_input.lower() == 'help':
                     self._show_help()
                 elif user_input.lower() == 'history':
                     self.show_history()
-                
-                # Change model if user types "model" or "sibourguiba"
                 elif user_input.lower() in ['model', 'sibourguiba']:
                     new_model = select_model(system_ram)
                     save_user_preferences(new_model)
@@ -457,7 +507,7 @@ class ShellCommandGenerator:
                     console.print(f"[green]Model changed to {new_model}[/green]")
                     self._check_ollama_status()
                 elif user_input.lower().startswith('execute '):
-                    command = user_input[8:].strip()
+                    command = user_input[8:].trip()
                     self.execute_command(command)
                 else:
                     result = self.generate_command(user_input)
@@ -480,8 +530,13 @@ class ShellCommandGenerator:
             except KeyboardInterrupt:
                 console.print("\n[yellow]Exiting...[/yellow]")
                 break
+            except SystemExit:
+                console.print("[yellow]Goodbye![/yellow]")
+                break
             except Exception as e:
-                logging.error(f"Error in command loop: {e}")
+                logging.exception("Error in command loop")
+                console.print(f"[red]Unexpected error: {e}[/red]")
+                break
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments"""
@@ -496,23 +551,20 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument("--auto-execute", action="store_true", help="Auto-execute generated commands")
     parser.add_argument("--history-file", type=Path, help="Custom history file location")
-    parser.add_argument("--change-model", action="store_true", 
-                        help="Change and save a new model preference")
+    parser.add_argument("--change-model", action="store_true", help="Change and save a new model preference")
     return parser.parse_args()
 
 def main() -> None:
-    """Main entry point with model memory feature"""
+    """Main entry with model memory feature"""
     try:
         ensure_ollama_installed()
         args = parse_arguments()
         system_ram = get_system_memory()
         os_info = get_os_info()
         
-        # Load saved preferences
         prefs = load_user_preferences()
         saved_model = prefs.get("preferred_model")
 
-        # Model selection logic
         if args.change_model or not saved_model:
             model_name = select_model(system_ram)
             save_user_preferences(model_name)
@@ -544,8 +596,8 @@ def main() -> None:
         )
         generator.run()
     except Exception as e:
+        logging.exception("Initialization error")
         console.print(f"[red]Initialization error: {e}[/red]")
-        logging.error("Initialization error", exc_info=True)
         sys.exit(1)
 
 if __name__ == '__main__':

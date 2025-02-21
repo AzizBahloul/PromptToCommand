@@ -12,7 +12,7 @@ CONFIG_FILE = CONFIG_DIR / "settings.json"
 # Default model configurations
 MODEL_CONFIG = {
     "tiny": {
-        "model_name": "gemma2:2b",
+        "model_name": "codegemma:2b",
         "description": "Lightweight model suitable for systems with limited RAM",
         "ram_threshold": 6,
         "specs": {
@@ -24,7 +24,7 @@ MODEL_CONFIG = {
         "use_case": "Basic command-line tasks, simple queries"
     },
     "medium": {
-        "model_name": "mistral-openorca:7b",
+        "model_name": "qwen2.5-coder:7b",
         "description": "Balanced model for systems with moderate RAM",
         "ram_threshold": 10,
         "specs": {
@@ -36,12 +36,12 @@ MODEL_CONFIG = {
         "use_case": "Complex commands, script generation"
     },
     "large": {
-        "model_name": "phi4:14b",
+        "model_name": "qwen2.5:14b",
         "description": "Full-size model for systems with ample RAM",
         "ram_threshold": 18,
         "specs": {
             "min_ram": "16GB",
-            "recommended_ram": "24GB ",
+            "recommended_ram": "24GB +",
             "disk_space": "10GB",
             "cpu": "8 cores"
         },
