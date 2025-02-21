@@ -93,6 +93,9 @@ def display_animated_banner() -> None:
     except Exception as e:
         logging.exception("Error during banner animation")
         print(BANNER)
+    # Wait a bit before clearing the banner
+    time.sleep(2)
+    clear_screen()
 
 def run() -> None:
     """Main entry point for banner display"""
@@ -483,7 +486,7 @@ User prompt: {prompt}
         
         # Add GPU detection status here
         if is_gpu_available():
-            console.print("[green]GPU detected: Your system has an NVIDIA GPU.[/green]")
+            console.print("[green]GPU detected[/green]")
         else:
             console.print("[yellow]No GPU detected: Falling back to CPU mode.[/yellow]")
         
