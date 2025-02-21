@@ -1,135 +1,101 @@
----
 
-**BourguibaGPT 🇹🇳**  
+------------------------------------------------------------
+BourguibaGPT - Tunisian Shell Command Assistant
+------------------------------------------------------------
 
-Your AI-Powered Tunisian Shell Command Assistant  
+OVERVIEW
+--------
+BourguibaGPT is an interactive shell command generator that helps users generate, validate, and execute safe shell commands using natural language prompts. Powered by Ollama AI, it offers an engaging interface with animated banners and interactive prompts. The tool is designed with safety in mind—it validates commands before execution and keeps a history of generated commands along with user feedback.
 
-Python Version: 3.6+  
-License: MIT  
-PyPI Version: [Check Here](https://pypi.org/project/bourguibagpt/)  
+FEATURES
+--------
+• Interactive command generation using AI (Ollama API)
+• Animated banner display for a dynamic user experience
+• Command validation to ensure only safe commands are executed
+• Command history tracking and feedback mechanism
+• Cross-platform support (Linux, macOS, and Windows)
+• Customizable model selection based on system memory and user preferences
+• OS-specific installation and service management routines
 
-BourguibaGPT is an intelligent CLI tool that transforms natural language requests into safe shell commands using advanced AI models. Designed with a focus on safety and usability, it's your perfect companion for terminal productivity.  
+FILE STRUCTURE
+--------------
+Project files are organized under the "src/bourguibagpt" directory as follows:
 
-CLI Demo: [View Image](https://via.placeholder.com/800x400.png?text=BourguibaGPT+Interactive+CLI+Demo)  
+1. main.py
+   - Main application entry point.
+   - Displays the animated banner.
+   - Manages interactive command generation and execution.
+   - Handles installation and verification of the Ollama CLI.
 
----
+2. config.py
+   - Contains default model configurations and OS-specific settings.
+   - Manages user preferences for the preferred model.
+   - Provides utility functions to load and save configuration settings.
 
-### Features ✨  
+3. validators.py
+   - Implements command validation logic to ensure only safe commands are executed.
+   - Checks the base command against a predefined whitelist and validates arguments.
 
-- **Natural Language Understanding** 🇹🇳  
-  Describe tasks in plain English, French, or Arabic (Tunisian dialect friendly!).  
-- **AI-Powered Command Generation** 🤖  
-  Leverages local LLMs via Ollama (default: deepseek-r1:1.5b).  
-- **Safety First** 🔒  
-  Multi-layer validation against dangerous commands.  
-- **Interactive CLI** 💻  
-  Rich terminal interface with syntax highlighting and progress indicators.  
-- **Command History** 📚  
-  Automatic tracking of generated commands with execution status.  
-- **Cross-Platform** 🌍  
-  Supports Linux, macOS, and Windows Subsystem for Linux.  
-- **Smart Execution** ⚡  
-  Optional auto-execution with confirmation prompts.  
+4. windows.py
+   - Contains Windows-specific functions.
+   - Handles installation of Ollama on Windows.
+   - Provides functions to verify installation and start the Ollama service.
 
----
+DEPENDENCIES
+------------
+• Python 3.7 or later
+• Rich (for enhanced terminal UI) - Install with: pip install rich
+• Requests (for HTTP API calls) - Install with: pip install requests
+• psutil (for system memory detection) - Install with: pip install psutil
+• Standard libraries: argparse, json, subprocess, logging, time, os, platform, etc.
 
-### Installation 📦  
+INSTALLATION
+------------
+1. Ensure Python 3.7 or later is installed on your system.
+2. Clone the repository to your local machine.
+3. Navigate to the repository’s root directory.
+4. Install the required Python packages. If a requirements file is available, run:
+       pip install -r requirements.txt
+   Otherwise, manually install the necessary packages (rich, requests, psutil).
+5. The application will check for the Ollama CLI. If not found, it will attempt to install it automatically based on your operating system.
+   - On Windows, it will use winget or download the installer directly.
+   - On Linux and macOS, it will attempt installation via curl or brew, respectively.
+6. Ensure you have the necessary permissions on your system to install and run external software.
 
-**Step 1: Install Ollama (required)**  
+USAGE
+-----
+To launch the application, run the following command from the project root:
 
-Run the following command in the terminal:  
+    python -m src.bourguibagpt.main
 
-`curl -fsSL https://ollama.com/install.sh | sh`  
-`ollama pull deepseek-r1:1.5b`
+Once started, the application will display an animated banner followed by a prompt. You can interact with the tool using the following commands:
 
-**Step 2: Install BourguibaGPT**  
+• help          - Display help information and available commands.
+• history       - Show the history of generated commands.
+• execute <cmd> - Execute a specific shell command.
+• model         - Change the AI model used for command generation.
+• sibourguiba   - Alias for changing the model.
+• exit / quit   - Exit the application.
 
-Now install BourguibaGPT with:  
+At the prompt, simply type a natural language description of the desired shell command. BourguibaGPT will generate the command, display it, and ask for confirmation before executing it.
 
-`pip install bourguibagpt`
+CONFIGURATION
+-------------
+User preferences are saved in a configuration file located at:
+    (Your Home Directory)/.config/bourguibagpt/settings.json
 
----
+This file stores your preferred AI model and the last used timestamp. The application automatically updates this file when you change the model preference.
 
-### Quick Start 🚀  
+TROUBLESHOOTING
+---------------
+• If the Ollama service is not running, the tool will attempt to start it automatically. On Linux and macOS, ensure that you have the necessary permissions.
+• In case of errors during command generation or execution, refer to the error messages displayed in the terminal.
+• Log messages are printed to the console for further troubleshooting. Check these messages if unexpected behavior occurs.
+• For command validation failures, ensure that your command requests use allowed commands and safe argument formats.
 
-Run the command:  
+LICENSE & SUPPORT
+-----------------
+This project is released under the MIT License. For support, contact the project maintainer or consult the issue tracker provided in the repository.
 
-`bourguibagpt`  
-
-Example interaction:  
-
-```
-╔══════════════════════════════════════════════════════════════╗
-║              Your Tunisian Shell Command Assistant           ║
-╚══════════════════════════════════════════════════════════════╝
-
-🇹🇳 BourguibaGPT → list all json files modified last week
-Generated command: find . -name "*.json" -mtime -7
-
-Execute? [yes/no]: yes
-✅ Command executed successfully
-```  
-
----
-
-### Advanced Usage 🛠️  
-
-#### Command Line Options  
-
-`bourguibagpt [OPTIONS]`  
-
-- `--model MODEL_NAME` → Specify Ollama model (default: deepseek-r1:1.5b).  
-- `--temperature FLOAT` → Control creativity (0.1-1.0, default: 0.7).  
-- `--auto-execute` → Auto-execute validated commands.  
-- `--history-file PATH` → Custom command history location.  
-
-#### Manage History  
-
-Show last 10 commands:  
-`bourguibagpt --history`  
-
-Execute from history:  
-`bourguibagpt execute "find . -name *.json -mtime -7"`  
-
----
-
-### Safety Measures ⚠️  
-
-BourguibaGPT includes multiple protection layers:  
-
-- Pattern matching against dangerous commands (e.g., `rm -rf /`).  
-- Command structure validation.  
-- Execution confirmation prompts.  
-- Restricted special characters handling.  
-- Model prompt engineering for safety.  
-
----
-
-### Roadmap 🗺️  
-
-- [ ] Browser-based GUI  
-- [ ] Command explanation mode  
-- [ ] Plugin system for custom validations  
-- [ ] Shared team history sync  
-- [ ] Alternative AI backend support  
-
----
-
-### Contributing 🤝  
-
-We welcome contributions! Please see our Contribution Guidelines (CONTRIBUTING.md) for details.  
-
----
-
-### License 📄  
-
-This project is licensed under the MIT License - see the LICENSE file for details.  
-
----
-
-GitHub Repository: [Visit Here](https://github.com/AzizBahloul/PromptToCommand)  
-Report Issues: [Submit Here](https://github.com/AzizBahloul/PromptToCommand/issues)  
-
----
-```
-
+------------------------------------------------------------
+  
