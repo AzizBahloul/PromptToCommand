@@ -13,6 +13,7 @@ import requests
 import subprocess
 import shutil
 from datetime import datetime
+import psutil
 
 from rich.console import Console
 from rich.panel import Panel
@@ -73,28 +74,28 @@ def display_animated_banner() -> None:
         # Calculate banner width and center it
         banner_width = max(len(line) for line in lines if line)
         padding = max(0, (term_width - banner_width) // 2)
-        # Animate banner appearance line by line
+        # Animate banner appearance line by line (reduced delay)
         for i in range(len(lines)):
             clear_screen()
             color = colors[i % len(colors)]
             for j in range(i + 1):
                 if lines[j].strip():
                     print(' ' * padding + f"{color}{BRIGHT}{GLOW}{lines[j]}{RESET}")
-            time.sleep(0.05)
-        # Animate banner glow effect
-        for i in range(10):
+            time.sleep(0.02)  # reduced from 0.05 seconds
+        # Animate banner glow effect (faster effect)
+        for i in range(5):  # reduced number of cycles
             clear_screen()
             color = colors[i % len(colors)]
             intensity = BRIGHT if i % 2 else '\033[2m'
             for line in lines:
                 if line.strip():
                     print(' ' * padding + f"{color}{intensity}{line}{RESET}")
-            time.sleep(0.1)
+            time.sleep(0.05)  # reduced from 0.1 seconds
     except Exception as e:
         logging.exception("Error during banner animation")
         print(BANNER)
     # Wait a bit before clearing the banner
-    time.sleep(2)
+    time.sleep(1)  # reduced from 2 seconds
     clear_screen()
 
 def run() -> None:
@@ -134,9 +135,13 @@ def ensure_ollama_installed() -> None:
 
 def get_system_memory() -> float:
     """Retrieve total system memory in GB."""
-    import psutil
     mem = psutil.virtual_memory()
     return mem.total / (1024 ** 3)
+
+def get_free_memory() -> float:
+    """Retrieve free (available) system memory in GB."""
+    mem = psutil.virtual_memory()
+    return mem.available / (1024 ** 3)
 
 def get_os_info() -> str:
     """Detect the operating system and, if Linux, the distribution."""
@@ -208,6 +213,19 @@ def is_gpu_available() -> bool:
     except Exception:
         return False
 
+def wait_for_service(url: str, total_timeout: int = 30, poll_interval: float = 1.0) -> bool:
+    """Poll the Ollama API endpoint until it's available or timeout is reached."""
+    start_time = time.time()
+    while (time.time() - start_time) < total_timeout:
+        try:
+            response = requests.get(url, timeout=2)
+            if response.status_code == 200:
+                return True
+        except Exception:
+            pass
+        time.sleep(poll_interval)
+    return False
+
 class ShellCommandGenerator:
     """Shell command generator with enhanced safety and reliability"""
     
@@ -254,7 +272,6 @@ class ShellCommandGenerator:
             logging.exception("Failed to save history")
 
     def _check_ollama_status(self) -> None:
-        """Verify Ollama is installed, running, and the selected model is available"""
         ensure_ollama_installed()
         # Display GPU detection status
         if is_gpu_available():
@@ -273,8 +290,11 @@ class ShellCommandGenerator:
                 if system == "Windows":
                     try:
                         start_ollama_service()
-                        time.sleep(10)
-                        response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
+                        if wait_for_service("http://localhost:11434/api/tags", total_timeout=15):
+                            response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
+                        else:
+                            console.print("[red]Ollama service did not start in time on Windows.[/red]")
+                            sys.exit(1)
                     except Exception as e:
                         console.print(f"[red]Failed to start Ollama on Windows: {e}[/red]")
                         sys.exit(1)
@@ -287,9 +307,12 @@ class ShellCommandGenerator:
                             console.print("[yellow]systemctl failed, running 'ollama serve'...[/yellow]")
                             serve_cmd = "ollama serve --gpu" if is_gpu_available() else "ollama serve"
                             subprocess.Popen(serve_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                        time.sleep(5)
-                        response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
-                        console.print("[green]Ollama service started successfully on Linux.[/green]")
+                        if wait_for_service("http://localhost:11434/api/tags", total_timeout=15):
+                            response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
+                            console.print("[green]Ollama service started successfully on Linux.[/green]")
+                        else:
+                            console.print("[red]Ollama service did not start in time on Linux.[/red]")
+                            sys.exit(1)
                     except Exception as e:
                         console.print(f"[red]Failed to start Ollama service on Linux: {e}[/red]")
                         sys.exit(1)
@@ -297,9 +320,12 @@ class ShellCommandGenerator:
                     try:
                         console.print("[yellow]Attempting to start Ollama service on macOS...[/yellow]")
                         subprocess.run(["open", "-a", "Ollama"], check=True)
-                        time.sleep(5)
-                        response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
-                        console.print("[green]Ollama service started successfully on macOS.[/green]")
+                        if wait_for_service("http://localhost:11434/api/tags", total_timeout=15):
+                            response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
+                            console.print("[green]Ollama service started successfully on macOS.[/green]")
+                        else:
+                            console.print("[red]Ollama service did not start in time on macOS.[/red]")
+                            sys.exit(1)
                     except Exception as e:
                         console.print(f"[red]Failed to start Ollama service on macOS: {e}[/red]")
                         sys.exit(1)
@@ -377,7 +403,7 @@ User prompt: {prompt}
                 response = requests.post(
                     self.ollama_api,
                     json=data,
-                    timeout=self.timeout
+                    timeout=self.timeout  # you may lower self.timeout if appropriate (e.g., 10)
                 )
                 response.raise_for_status()
                 result = response.json()
@@ -394,7 +420,7 @@ User prompt: {prompt}
                 logging.warning(f"Ollama API call attempt {attempt+1} failed: {e}")
                 if attempt == self.max_retries - 1:
                     raise ValueError(f"Failed to call Ollama API after {self.max_retries} attempts: {e}")
-                time.sleep(1)
+                time.sleep(0.5)  # reduced from 1 second
         return {"command": None}
 
     def execute_command(self, command: str, confirm_execution: bool = True) -> bool:
@@ -510,11 +536,11 @@ User prompt: {prompt}
                     console.print(f"[green]Model changed to {new_model}[/green]")
                     self._check_ollama_status()
                 elif user_input.lower().startswith('execute '):
-                    command = user_input[8:].trip()
+                    command = user_input[8:].strip()
                     self.execute_command(command)
                 else:
                     result = self.generate_command(user_input)
-                    if result.get("command"):
+                    if (result.get("command")):
                         console.print(f"\n[green]Generated command:[/green]")
                         console.print(Panel(result["command"], style="bold white"))
                         choice = Prompt.ask(
@@ -522,7 +548,7 @@ User prompt: {prompt}
                             choices=["e", "n"],
                             default="n"
                         )
-                        if choice.lower() == "e":
+                        if (choice.lower() == "e"):
                             self.execute_command(result["command"], confirm_execution=False)
                             console.print("[green]Exiting...[/green]")
                             sys.exit(0)
@@ -563,11 +589,23 @@ def main() -> None:
         ensure_ollama_installed()
         args = parse_arguments()
         system_ram = get_system_memory()
+        free_memory = get_free_memory()
         os_info = get_os_info()
         
+        console.print(f"[bold cyan]System Information:[/bold cyan]")
+        console.print(f"• OS: {os_info}")
+        console.print(f"• Total RAM: {system_ram:.1f} GB")
+        console.print(f"• Free Memory: {free_memory:.1f} GB")
+        
+        # A general minimum free memory (if desired) can be set here:
+        MIN_FREE_MEMORY = 2.0  # fallback minimum
+        if free_memory < MIN_FREE_MEMORY:
+            console.print(f"[red]Not enough free memory ({free_memory:.1f} GB available). Please free at least {MIN_FREE_MEMORY} GB to continue.[/red]")
+            sys.exit(1)
+            
         prefs = load_user_preferences()
         saved_model = prefs.get("preferred_model")
-
+        
         if args.change_model or not saved_model:
             model_name = select_model(system_ram)
             save_user_preferences(model_name)
@@ -578,10 +616,24 @@ def main() -> None:
             model_name = saved_model
             console.print(f"[green]Using saved model: {model_name}[/green]")
             console.print("[yellow]Use '--change-model' to switch models[/yellow]")
-
-        console.print(f"[bold cyan]System Information:[/bold cyan]")
-        console.print(f"• OS: {os_info}")
-        console.print(f"• RAM: {system_ram:.1f} GB")
+        
+        # Set per-model minimum free memory thresholds
+        required_threshold = None
+        for key, config in MODEL_CONFIG.items():
+            if config["model_name"] == model_name:
+                if key == "tiny":
+                    required_threshold = 2.0
+                elif key == "medium":
+                    required_threshold = 6.0
+                else:
+                    required_threshold = config["ram_threshold"]
+                break
+        
+        if required_threshold is not None and free_memory < required_threshold:
+            console.print(f"[red]Warning: The chosen model '{model_name}' requires at least {required_threshold} GB of free RAM, " 
+                          f"but only {free_memory:.1f} GB is available. Aborting.[/red]")
+            sys.exit(1)
+        
         recommended = recommend_model(system_ram)
         console.print(f"• Recommended Model: {MODEL_CONFIG[recommended]['description']}")
         
