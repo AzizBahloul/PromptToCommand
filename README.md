@@ -35,7 +35,7 @@ BourguibaGPT is an innovative, AI-powered shell command assistant specifically d
 - **🔒 Advanced Safety Validation**: Multi-layer command validation system
 - **📖 Command History & Feedback**: Track usage patterns and improve recommendations
 - **🌐 Cross-Platform Support**: Works seamlessly on Linux, macOS, and Windows
-- **⚡ Performance Optimized**: Smart model selection based on system resources
+- **⚡ Fast Local Decisions**: Uses one small, deterministic local model with structured output
 
 ### Enhanced User Experience
 - **🎬 Animated Welcome Banner**: Dynamic startup experience
@@ -125,11 +125,13 @@ pip install -e .
 
 ### Automatic Ollama Setup
 
-BourguibaGPT automatically detects and installs Ollama if not present:
+BourguibaGPT automatically installs Ollama during direct package installation and also checks for it at startup:
 
-- **Windows**: Uses winget or direct installer download
-- **macOS**: Uses Homebrew or direct download
-- **Linux**: Uses curl installation script
+- **Windows**: Uses winget
+- **macOS**: Uses Homebrew
+- **Linux**: Uses the official Ollama installation script
+
+The application uses the single fixed model `qwen3.5:0.8b` (about 1 GB). It is a local open-source alternative for this shell-command task, not the proprietary Jev model. Jev returns typed decisions and does not generate shell commands; this application uses Ollama JSON schema output, confidence, deterministic inference, and no-thinking mode to provide a similar bounded-output workflow.
 
 ## 📖 Usage
 
@@ -156,8 +158,8 @@ Execute this command? (y/n): y
 | `help` | Show help information | `help` |
 | `history` | Display command history | `history` |
 | `execute <cmd>` | Execute specific command | `execute ls -la` |
-| `model` | Change AI model | `model` |
-| `sibourguiba` | Model selection alias | `sibourguiba` |
+| `model` | Show the fixed local model | `model` |
+| `sibourguiba` | Show the fixed local model | `sibourguiba` |
 | `config` | Show configuration | `config` |
 | `stats` | Usage statistics | `stats` |
 | `export` | Export command history | `export history.json` |
@@ -165,16 +167,6 @@ Execute this command? (y/n): y
 | `exit/quit` | Exit application | `exit` |
 
 ### Advanced Features
-
-#### Model Selection
-```bash
-> model
-Available models:
-1. llama3.2:1b (Fast, 1GB RAM)
-2. llama3.1:8b (Balanced, 8GB RAM)
-3. codellama:13b (Code-focused, 16GB RAM)
-Choose model [1-3]: 2
-```
 
 #### Command History Management
 ```bash
@@ -192,41 +184,9 @@ Choose model [1-3]: 2
 
 ## 🔧 Configuration
 
-### Configuration File Location
-- **Linux/macOS**: `~/.config/bourguibagpt/settings.json`
-- **Windows**: `%APPDATA%\bourguibagpt\settings.json`
-
-### Sample Configuration
-```json
-{
-  "model": {
-    "preferred": "llama3.1:8b",
-    "fallback": "llama3.2:1b",
-    "auto_select": true
-  },
-  "safety": {
-    "validation_level": "strict",
-    "allow_sudo": false,
-    "enable_whitelist": true,
-    "log_commands": true
-  },
-  "ui": {
-    "show_banner": true,
-    "color_scheme": "tunisia",
-    "animation_speed": "normal"
-  },
-  "ollama": {
-    "host": "localhost",
-    "port": 11434,
-    "timeout": 30
-  }
-}
-```
-
 ### Environment Variables
 
 ```bash
-export BOURGUIBA_MODEL="llama3.1:8b"
 export BOURGUIBA_SAFETY_LEVEL="strict"
 export OLLAMA_HOST="localhost:11434"
 export BOURGUIBA_LOG_LEVEL="INFO"

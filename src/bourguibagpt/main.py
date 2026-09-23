@@ -7,6 +7,7 @@ import argparse
 import time
 import signal
 import json
+import shlex
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 import requests
@@ -23,7 +24,7 @@ from rich.text import Text
 from rich.layout import Layout
 from rich import box
 
-from .config import MODEL_CONFIG, load_user_preferences, save_user_preferences
+from .config import MODEL_NAME
 from .windows import install_ollama, verify_installation, start_ollama_service
 from .validators import CommandValidator
 
@@ -156,49 +157,50 @@ def get_os_info() -> str:
             logging.warning(f"Could not detect Linux distribution: {e}")
     return os_name
 
-def recommend_model(system_ram: float) -> str:
-    """
-    Recommend a model key based on available RAM.
-    :param system_ram: The amount of system RAM in GB
-    :return: Model key recommendation (tiny, medium, large)
-    """
-    if system_ram <= 0:
-        raise ValueError("System RAM must be positive.")
-    if system_ram <= 8:
-        return "tiny"
-    elif system_ram <= 16:
-        return "medium"
-    else:
-        return "large"
 
-def select_model(system_ram: float) -> str:
-    """Interactive model selection with saved preference"""
-    models = []
-    for key, config in MODEL_CONFIG.items():
-        models.append({
-            'name': key.capitalize(),
-            'model_name': config['model_name'],
-            'ram': config['ram_threshold'],
-            'description': config['description']
-        })
-    prefs = load_user_preferences()
-    saved_model = prefs.get("preferred_model")
-    default_index = 0
-    if saved_model:
-        for i, m in enumerate(models):
-            if m['model_name'] == saved_model:
-                default_index = i
-                break
-    console.print("[bold]Available Models:[/bold]")
-    for i, model in enumerate(models):
-        status = "✓" if system_ram >= model['ram'] else "✗"
-        console.print(f"{i+1}. {status} {model['name']} ({model['model_name']})")
-    choice = Prompt.ask(
-        "\n[bold cyan]Select model[/bold cyan] (number)",
-        choices=[str(i+1) for i in range(len(models))],
-        default=str(default_index+1)
-    )
-    return models[int(choice)-1]['model_name']
+def resolve_user_directory(target: str) -> Optional[Path]:
+    """Resolve an XDG user directory without assuming a username or fixed path."""
+    normalized = re.sub(r"[^a-zA-Z0-9_]", "", target).upper()
+    if not normalized:
+        return None
+
+    if shutil.which("xdg-user-dir"):
+        try:
+            result = subprocess.run(
+                ["xdg-user-dir", normalized],
+                capture_output=True, text=True, check=True
+            )
+            configured = result.stdout.strip()
+            if configured:
+                return Path(configured).expanduser()
+        except (OSError, subprocess.CalledProcessError):
+            pass
+
+    user_dirs = Path.home() / ".config" / "user-dirs.dirs"
+    if user_dirs.exists():
+        try:
+            for line in user_dirs.read_text().splitlines():
+                if line.startswith(f"XDG_{normalized}_DIR="):
+                    configured = line.split("=", 1)[1].strip().strip('"')
+                    directory = Path(os.path.expandvars(configured.replace("$HOME", str(Path.home()))))
+                    return directory
+        except OSError:
+            pass
+
+    return None
+
+
+def resolve_navigation_target(action: str, target: str) -> Optional[Dict[str, Any]]:
+    """Turn a model-identified navigation target into a local command."""
+    if action.lower() not in {"navigate", "open", "change_directory"}:
+        return None
+    if target.strip().lower() in {"current", "current_directory", "working_directory"}:
+        return {"command": "pwd", "confidence": 1.0}
+    directory = resolve_user_directory(target)
+    if directory is None:
+        return None
+    return {"command": f"cd {shlex.quote(str(directory))}", "confidence": 1.0}
+
 
 def is_gpu_available() -> bool:
     """Check if NVIDIA GPU is available using nvidia-smi"""
@@ -231,8 +233,8 @@ class ShellCommandGenerator:
     
     def __init__(
         self,
-        model_name: str = "mistral-openorca:7b",
-        temperature: float = 0.7,
+        model_name: str = MODEL_NAME,
+        temperature: float = 0.0,
         auto_execute: bool = False,
         history_file: Optional[Path] = None,
         max_retries: int = 3,
@@ -249,7 +251,11 @@ class ShellCommandGenerator:
         self.timeout = timeout
         self.command_history: List[Dict[str, Any]] = []
         self.history_file = history_file or Path.home() / ".shell_command_history.json"
-        self.ollama_api = "http://localhost:11434/api/generate"
+        ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        if not ollama_host.startswith(("http://", "https://")):
+            ollama_host = f"http://{ollama_host}"
+        self.ollama_base_url = ollama_host.rstrip("/")
+        self.ollama_api = f"{self.ollama_base_url}/api/generate"
         self._load_history()
         self._check_ollama_status()
         
@@ -283,15 +289,15 @@ class ShellCommandGenerator:
         with Progress() as progress:
             task = progress.add_task("[cyan]Checking Ollama status...", total=1)
             try:
-                response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
+                response = requests.get(f"{self.ollama_base_url}/api/tags", timeout=self.timeout)
                 progress.update(task, advance=0.3)
             except requests.exceptions.ConnectionError:
                 console.print("[red]Ollama service is not running.[/red]")
                 if system == "Windows":
                     try:
                         start_ollama_service()
-                        if wait_for_service("http://localhost:11434/api/tags", total_timeout=15):
-                            response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
+                        if wait_for_service(f"{self.ollama_base_url}/api/tags", total_timeout=15):
+                            response = requests.get(f"{self.ollama_base_url}/api/tags", timeout=self.timeout)
                         else:
                             console.print("[red]Ollama service did not start in time on Windows.[/red]")
                             sys.exit(1)
@@ -307,8 +313,8 @@ class ShellCommandGenerator:
                             console.print("[yellow]systemctl failed, running 'ollama serve'...[/yellow]")
                             serve_cmd = "ollama serve --gpu" if is_gpu_available() else "ollama serve"
                             subprocess.Popen(serve_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                        if wait_for_service("http://localhost:11434/api/tags", total_timeout=15):
-                            response = requests.get("http://localhost:11434/api/tags", timeout=self.timeout)
+                        if wait_for_service(f"{self.ollama_base_url}/api/tags", total_timeout=15):
+                            response = requests.get(f"{self.ollama_base_url}/api/tags", timeout=self.timeout)
                             console.print("[green]Ollama service started successfully on Linux.[/green]")
                         else:
                             console.print("[red]Ollama service did not start in time on Linux.[/red]")
@@ -353,6 +359,7 @@ class ShellCommandGenerator:
             result = {
                 'prompt': prompt,
                 'command': command,
+                'confidence': response.get('confidence'),
                 'timestamp': datetime.now().isoformat(),
                 'success': True,
                 'error': None
@@ -365,6 +372,7 @@ class ShellCommandGenerator:
             error_result = {
                 'prompt': prompt,
                 'command': None,
+                'confidence': None,
                 'timestamp': datetime.now().isoformat(),
                 'success': False,
                 'error': str(e)
@@ -377,26 +385,56 @@ class ShellCommandGenerator:
     def _call_ollama(self, prompt: str) -> Dict[str, Any]:
         """Call Ollama API with retry logic, refined prompt, and improved output instructions."""
         context = get_os_info()
-        examples = """
-Examples of valid commands:
-1) ls -la
-2) grep 'pattern' file.txt
-3) tar -czf archive.tar.gz folder/
-4) docker build -t image:latest .
-"""
         message = f"""
-Operating System: {context}
-You are a shell command generator that should return only the command.
-No extra text.
+Operating system: {context}
+Current working directory: {Path.cwd()}
 
-User prompt: {prompt}
-{examples}
+You convert one natural-language request into one safe shell decision.
+Return exactly one JSON object with these four keys and no markdown or explanation:
+{{"action":"command|navigate", "target":"", "command":"", "confidence":0.0}}
+
+Rules:
+1. Use action "command" for shell commands. Use action "navigate" only when the user
+   explicitly asks to go/open/change directory. For navigation, put the requested user
+   directory name in target (Desktop, Documents, Downloads, etc.) and leave command empty.
+2. A request to locate, show, or identify the current folder means action "command",
+   target "current_directory", command "pwd".
+3. Preserve paths exactly as written. Never replace a relative path such as "src" with
+   the working directory, invent paths, or add arbitrary limits.
+4. Return one command or a pipeline only. Do not use explanations, aliases, placeholders,
+   command substitution, chaining, redirection, or destructive operations unless explicitly requested.
+5. If the request is ambiguous or unsafe, return an empty command and low confidence.
+
+Examples:
+User: locate this folder
+JSON: {{"action":"command","target":"current_directory","command":"pwd","confidence":0.99}}
+User: move to the desktop
+JSON: {{"action":"navigate","target":"Desktop","command":"","confidence":0.99}}
+User: find Python files under src
+JSON: {{"action":"command","target":"","command":"find src -type f -name '*.py'","confidence":0.90}}
+User: list hidden files here
+JSON: {{"action":"command","target":"","command":"ls -la","confidence":0.99}}
+
+User request: {prompt}
 """
         data = {
             "model": self.model_name,
             "prompt": message,
             "temperature": self.temperature,
-            "stream": False
+            "stream": False,
+            "format": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["command", "navigate"]},
+                    "target": {"type": "string"},
+                    "command": {"type": "string"},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+                },
+                "required": ["action", "target", "command", "confidence"]
+            },
+            "think": False,
+            "keep_alive": "5m",
+            "options": {"temperature": 0.0, "num_predict": 96}
         }
         for attempt in range(self.max_retries):
             try:
@@ -409,13 +447,25 @@ User prompt: {prompt}
                 result = response.json()
                 if "response" not in result:
                     raise ValueError("Invalid API response format")
-                # Clean up the command output
-                command = result["response"].strip()
-                command = command.replace('```shell', '').replace('```', '').strip()
-                lines = [line.strip() for line in command.splitlines()]
-                lines = [line for line in lines if line.lower() not in ["bash", "zsh", "sh"]]
-                command = " ".join(lines).strip()
-                return {"command": command}
+                raw_response = result["response"].strip()
+                confidence = None
+                try:
+                    response_data = json.loads(raw_response)
+                    command = response_data["command"]
+                    confidence = response_data.get("confidence")
+                    navigation = resolve_navigation_target(
+                        response_data.get("action", "command"),
+                        response_data.get("target", "")
+                    )
+                    if navigation:
+                        return navigation
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    # Keep compatibility with older local models that ignore format.
+                    command = raw_response.replace('```shell', '').replace('```', '').strip()
+                    lines = [line.strip() for line in command.splitlines()]
+                    lines = [line for line in lines if line.lower() not in ["bash", "zsh", "sh"]]
+                    command = " ".join(lines).strip()
+                return {"command": command, "confidence": confidence}
             except requests.exceptions.RequestException as e:
                 logging.warning(f"Ollama API call attempt {attempt+1} failed: {e}")
                 if attempt == self.max_retries - 1:
@@ -449,12 +499,6 @@ User prompt: {prompt}
                 console.print("[green]Command executed successfully[/green]")
                 if result.stdout:
                     console.print(Panel(result.stdout, title="Output", border_style="green"))
-                feedback = Prompt.ask(
-                    "\n[yellow]Rate the command success on a scale of 1-5 (1=poor, 5=excellent):[/yellow]",
-                    choices=["1", "2", "3", "4", "5"],
-                    default="3"
-                )
-                self.command_history[-1]['feedback'] = feedback
                 self._save_history()
                 return True
             else:
@@ -486,7 +530,7 @@ User prompt: {prompt}
 [cyan]help[/cyan]          - Show this help message
 [cyan]history[/cyan]       - Show command history
 [cyan]execute <command>[/cyan] - Execute a specific command
-[cyan]model[/cyan]/[cyan]sibourguiba[/cyan] - Change the selected model
+[cyan]model[/cyan]          - Show the fixed local model
 [cyan]exit[/cyan]/[cyan]quit[/cyan]    - Exit BourguibaGPT
 
 [bold]Tips:[/bold]
@@ -508,7 +552,6 @@ User prompt: {prompt}
         console.print(f"[bold blue]BourguibaGPT[/bold blue] [cyan]v{VERSION}[/cyan]")
         console.print(f"[dim]Powered by Ollama - Model: {self.model_name}[/dim]")
         console.print("\n[italic]Type 'help' for commands or 'exit' to quit[/italic]\n")
-        console.print("[yellow]Tip: You can change the model anytime by typing 'sibourguiba'.[/yellow]")
         
         # Add GPU detection status here
         if is_gpu_available():
@@ -516,7 +559,6 @@ User prompt: {prompt}
         else:
             console.print("[yellow]No GPU detected: Falling back to CPU mode.[/yellow]")
         
-        system_ram = get_system_memory()
         while True:
             try:
                 user_input = Prompt.ask("\n[bold magenta]🇹🇳 BourguibaGPT[/bold magenta] [bold blue]→[/bold blue]")
@@ -530,11 +572,7 @@ User prompt: {prompt}
                 elif user_input.lower() == 'history':
                     self.show_history()
                 elif user_input.lower() in ['model', 'sibourguiba']:
-                    new_model = select_model(system_ram)
-                    save_user_preferences(new_model)
-                    self.model_name = new_model
-                    console.print(f"[green]Model changed to {new_model}[/green]")
-                    self._check_ollama_status()
+                    console.print(f"[green]Using fixed local model: {self.model_name}[/green]")
                 elif user_input.lower().startswith('execute '):
                     command = user_input[8:].strip()
                     self.execute_command(command)
@@ -543,12 +581,16 @@ User prompt: {prompt}
                     if (result.get("command")):
                         console.print(f"\n[green]Generated command:[/green]")
                         console.print(Panel(result["command"], style="bold white"))
+                        if result.get("confidence") is not None:
+                            console.print(
+                                f"[dim]Decision confidence: {result['confidence']:.0%}[/dim]"
+                            )
                         choice = Prompt.ask(
-                            "\n[yellow]Type 'e' to execute the generated command and exit, or 'n' to return to the prompt:[/yellow]",
-                            choices=["e", "n"],
-                            default="n"
+                            "\n[yellow]Execute this generated command? (y/n)[/yellow]",
+                            choices=["y", "n"],
+                            default="y"
                         )
-                        if (choice.lower() == "e"):
+                        if (choice.lower() == "y"):
                             self.execute_command(result["command"], confirm_execution=False)
                             console.print("[green]Exiting...[/green]")
                             sys.exit(0)
@@ -570,17 +612,8 @@ User prompt: {prompt}
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(description="Enhanced Shell Command Generator")
-    parser.add_argument("--model", default="mistral-openorca:7b", help="Ollama model name")
-    parser.add_argument(
-        "--temperature",
-        type=float,
-        default=0.7,
-        help="Generation temperature (0.0-1.0)",
-        choices=[x/10 for x in range(11)]
-    )
     parser.add_argument("--auto-execute", action="store_true", help="Auto-execute generated commands")
     parser.add_argument("--history-file", type=Path, help="Custom history file location")
-    parser.add_argument("--change-model", action="store_true", help="Change and save a new model preference")
     return parser.parse_args()
 
 def main() -> None:
@@ -588,64 +621,15 @@ def main() -> None:
     try:
         ensure_ollama_installed()
         args = parse_arguments()
-        system_ram = get_system_memory()
         free_memory = get_free_memory()
         os_info = get_os_info()
         
         console.print(f"[bold cyan]System Information:[/bold cyan]")
         console.print(f"• OS: {os_info}")
-        console.print(f"• Total RAM: {system_ram:.1f} GB")
         console.print(f"• Free Memory: {free_memory:.1f} GB")
-        
-        # A general minimum free memory (if desired) can be set here:
-        MIN_FREE_MEMORY = 2.0  # fallback minimum
-        if free_memory < MIN_FREE_MEMORY:
-            console.print(f"[red]Not enough free memory ({free_memory:.1f} GB available). Please free at least {MIN_FREE_MEMORY} GB to continue.[/red]")
-            sys.exit(1)
-            
-        prefs = load_user_preferences()
-        saved_model = prefs.get("preferred_model")
-        
-        if args.change_model or not saved_model:
-            model_name = select_model(system_ram)
-            save_user_preferences(model_name)
-        elif args.model:
-            model_name = args.model
-            save_user_preferences(model_name)
-        else:
-            model_name = saved_model
-            console.print(f"[green]Using saved model: {model_name}[/green]")
-            console.print("[yellow]Use '--change-model' to switch models[/yellow]")
-        
-        # Set per-model minimum free memory thresholds
-        required_threshold = None
-        for key, config in MODEL_CONFIG.items():
-            if config["model_name"] == model_name:
-                if key == "tiny":
-                    required_threshold = 2.0
-                elif key == "medium":
-                    required_threshold = 6.0
-                else:
-                    required_threshold = config["ram_threshold"]
-                break
-        
-        if required_threshold is not None and free_memory < required_threshold:
-            console.print(f"[red]Warning: The chosen model '{model_name}' requires at least {required_threshold} GB of free RAM, " 
-                          f"but only {free_memory:.1f} GB is available. Aborting.[/red]")
-            sys.exit(1)
-        
-        recommended = recommend_model(system_ram)
-        console.print(f"• Recommended Model: {MODEL_CONFIG[recommended]['description']}")
-        
-        console.print("\n[bold]Available Models:[/bold]")
-        for key, config in MODEL_CONFIG.items():
-            status = "✓" if system_ram >= config["ram_threshold"] else "✗"
-            console.print(f"• {key.capitalize()} [{status}]: {config['description']}")
-        
-        console.print("\n[bold yellow]Please select a model using your keyboard's arrow keys if needed:[/bold yellow]")
+        console.print(f"• Fixed local model: {MODEL_NAME}")
+
         generator = ShellCommandGenerator(
-            model_name=model_name,
-            temperature=args.temperature,
             auto_execute=args.auto_execute,
             history_file=args.history_file
         )
