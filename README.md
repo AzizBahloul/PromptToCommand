@@ -54,21 +54,19 @@ BourguibaGPT is an innovative, AI-powered shell command assistant specifically d
 ## 📁 Project Structure
 
 ```
-bourguibagpt/
+PromptToCommand/
 ├── src/
 │   └── bourguibagpt/
-│       ├── main.py              # Application entry point
-│       ├── config.py            # Configuration management
-│       ├── validators.py        # Command validation logic
-│       ├── windows.py           # Windows-specific functions
-│       ├── models/              # AI model configurations
-│       ├── utils/               # Utility functions
-│       └── tests/               # Test suite
-├── docs/                        # Documentation
-├── requirements.txt             # Python dependencies
-├── setup.py                     # Package setup
-├── pyproject.toml              # Modern Python packaging
-└── README.md                   # This file
+│       ├── main.py                  # Application entry point, Ollama management, execution loop
+│       ├── config.py                # Model name and version (single source of truth)
+│       ├── prompt_engineering.py    # Shell-aware system prompt + response parsing
+│       ├── validators.py            # Command whitelist and argument safety checks
+│       └── windows.py               # Windows-specific Ollama install/service functions
+├── requirements.txt                 # Python dependencies
+├── setup.py                         # Package setup (also installs Ollama + pulls the model)
+├── setup.cfg                        # Package metadata and version
+├── pyproject.toml                   # Build backend configuration
+└── README.md                        # This file
 ```
 
 ### File Descriptions
@@ -76,7 +74,8 @@ bourguibagpt/
 | File | Purpose | Key Functions |
 |------|---------|---------------|
 | `main.py` | Application core | Banner display, command generation, Ollama management |
-| `config.py` | Settings management | Model configuration, user preferences, OS detection |
+| `config.py` | Settings management | Fixed model name and app version |
+| `prompt_engineering.py` | Prompt design | Builds the per-shell system prompt, parses/cleans the model's response |
 | `validators.py` | Security layer | Command whitelist, argument validation, safety checks |
 | `windows.py` | Windows support | Ollama installation, service management, Windows-specific features |
 
@@ -91,8 +90,8 @@ bourguibagpt/
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/bourguibagpt.git
-cd bourguibagpt
+git clone https://github.com/AzizBahloul/PromptToCommand.git
+cd PromptToCommand
 
 # Install dependencies
 pip install -r requirements.txt
@@ -118,8 +117,8 @@ pip install bourguibagpt
 
 #### Development Installation
 ```bash
-git clone https://github.com/yourusername/bourguibagpt.git
-cd bourguibagpt
+git clone https://github.com/AzizBahloul/PromptToCommand.git
+cd PromptToCommand
 pip install -e .
 ```
 
@@ -131,7 +130,7 @@ BourguibaGPT automatically installs Ollama during direct package installation an
 - **macOS**: Uses Homebrew
 - **Linux**: Uses the official Ollama installation script
 
-The application uses the single fixed model `qwen3.5:0.8b` (about 1 GB). It is a local open-source alternative for this shell-command task, not the proprietary Jev model. Jev returns typed decisions and does not generate shell commands; this application uses Ollama JSON schema output, confidence, deterministic inference, and no-thinking mode to provide a similar bounded-output workflow.
+The application uses the single fixed model `qwen2.5-coder:1.5b` (about 1 GB). It is a local open-source alternative for this shell-command task, not the proprietary Jev model. Jev returns typed decisions and does not generate shell commands; this application uses Ollama JSON schema output, confidence, deterministic inference, and no-thinking mode to provide a similar bounded-output workflow. (An earlier build used `qwen3.5:0.8b`; it was replaced after testing showed a code-tuned model gives more accurate commands at the same download size.)
 
 ## 📖 Usage
 
@@ -156,40 +155,19 @@ Execute this command? (y/n): y
 | Command | Description | Example |
 |---------|-------------|---------|
 | `help` | Show help information | `help` |
-| `history` | Display command history | `history` |
-| `execute <cmd>` | Execute specific command | `execute ls -la` |
-| `model` | Show the fixed local model | `model` |
-| `sibourguiba` | Show the fixed local model | `sibourguiba` |
-| `config` | Show configuration | `config` |
-| `stats` | Usage statistics | `stats` |
-| `export` | Export command history | `export history.json` |
-| `clear` | Clear screen | `clear` |
-| `exit/quit` | Exit application | `exit` |
+| `history` | Display the last 10 generated commands | `history` |
+| `execute <cmd>` | Run a specific command directly, still safety-validated | `execute ls -la` |
+| `model` / `sibourguiba` | Show the fixed local model | `model` |
+| `exit` / `quit` | Exit application | `exit` |
 
-### Advanced Features
-
-#### Command History Management
-```bash
-> history --filter "git"
-> history --export json
-> history --clear
-```
-
-#### Safety Configuration
-```bash
-> config safety --level strict
-> config whitelist --add "custom-command"
-> config validation --enable-deep-scan
-```
+Anything else you type is treated as a natural-language request and sent to the model.
 
 ## 🔧 Configuration
 
 ### Environment Variables
 
 ```bash
-export BOURGUIBA_SAFETY_LEVEL="strict"
-export OLLAMA_HOST="localhost:11434"
-export BOURGUIBA_LOG_LEVEL="INFO"
+export OLLAMA_HOST="localhost:11434"  # point at a remote or non-default Ollama instance
 ```
 
 ## 🛡️ Security & Safety
@@ -225,18 +203,12 @@ export BOURGUIBA_LOG_LEVEL="INFO"
 - **Network**: Stable internet for initial setup
 
 ### Recommended Configuration
-- **RAM**: 8GB+ (for larger models)
-- **Storage**: 10GB+ (for model storage)
+- **RAM**: 8GB+ (comfortable headroom; the model itself only needs about 2GB)
+- **Storage**: 2GB+ free (the fixed model is about 1GB)
 - **CPU**: Quad-core processor
-- **GPU**: NVIDIA GPU (optional, for faster inference)
+- **GPU**: NVIDIA GPU (optional; the model runs fine on CPU, just slower)
 
-### Model Performance Comparison
-
-| Model | Size | RAM Usage | Speed | Accuracy |
-|-------|------|-----------|-------|----------|
-| llama3.2:1b | 1GB | 2GB | ⚡⚡⚡ | ⭐⭐⭐ |
-| llama3.1:8b | 8GB | 10GB | ⚡⚡ | ⭐⭐⭐⭐ |
-| codellama:13b | 13GB | 16GB | ⚡ | ⭐⭐⭐⭐⭐ |
+The app always uses the single fixed model described above (`qwen2.5-coder:1.5b`, ~1GB) — there is no larger/smaller model to opt into from the UI.
 
 ## 🔧 Troubleshooting
 
@@ -259,11 +231,8 @@ python -m src.bourguibagpt.main
 # Verify model availability
 ollama list
 
-# Pull missing model
-ollama pull llama3.1:8b
-
-# Check system resources
-bourguibagpt --check-system
+# Pull the model BourguibaGPT expects
+ollama pull qwen2.5-coder:1.5b
 ```
 
 #### Permission Errors
@@ -276,14 +245,9 @@ sudo chown $USER ~/.ollama
 icacls "%USERPROFILE%\.ollama" /grant %USERNAME%:F
 ```
 
-### Debug Mode
-```bash
-python -m src.bourguibagpt.main --debug --log-level DEBUG
-```
+### Logs
 
-### Log Locations
-- **Linux/macOS**: `~/.config/bourguibagpt/logs/`
-- **Windows**: `%APPDATA%\bourguibagpt\logs\`
+BourguibaGPT logs to the console it's running in (no separate log file). Command history is saved to `~/.shell_command_history.json` by default, or the path passed via `--history-file`.
 
 ## 🤝 Contributing
 
@@ -300,8 +264,8 @@ We welcome contributions from the Tunisian developer community and beyond!
 ### Development Setup
 ```bash
 # Fork the repository
-git clone https://github.com/yourusername/bourguibagpt.git
-cd bourguibagpt
+git clone https://github.com/AzizBahloul/PromptToCommand.git
+cd PromptToCommand
 
 # Create development environment
 python -m venv venv

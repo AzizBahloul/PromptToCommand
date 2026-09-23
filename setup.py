@@ -1,11 +1,17 @@
 import platform
 import shutil
 import subprocess
+import sys
+from pathlib import Path
 
 from setuptools import setup
 from setuptools.command.install import install
 
-MODEL_NAME = "qwen3.5:0.8b"
+# config.py has no dependencies of its own, so it can be read directly
+# without a full package import, keeping this in sync with the model the
+# app actually uses instead of duplicating the name here.
+sys.path.insert(0, str(Path(__file__).parent / "src"))
+from bourguibagpt.config import MODEL_NAME
 
 class InstallWithOllama(install):
     """Install the local Ollama runtime when the package is installed directly."""

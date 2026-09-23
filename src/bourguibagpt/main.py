@@ -24,7 +24,15 @@ from rich.text import Text
 from rich.layout import Layout
 from rich import box
 
-from .config import MODEL_NAME
+from .config import MODEL_NAME, VERSION
+from .prompt_engineering import (
+    SHELL_LABELS,
+    FORMAT_SCHEMA,
+    build_system_prompt,
+    clean_command,
+    extract_json_object,
+    shell_family,
+)
 from .windows import install_ollama, verify_installation, start_ollama_service
 from .validators import CommandValidator
 
@@ -37,8 +45,6 @@ logging.basicConfig(
 
 # Initialize console for rich output
 console = Console()
-
-VERSION = "2.0.0"  # Version constant
 
 def get_rainbow_colors() -> List[str]:
     return ['\033[91m', '\033[93m', '\033[92m', '\033[96m', '\033[94m', '\033[95m']
@@ -158,48 +164,132 @@ def get_os_info() -> str:
     return os_name
 
 
+# The canonical XDG user-dir type names. Note the spec itself is
+# inconsistent: every type here is plural (DOCUMENTS, PICTURES, VIDEOS,
+# MUSIC, TEMPLATES) except DOWNLOAD, which is singular.
+XDG_DIR_TYPES = {
+    "DESKTOP", "DOWNLOAD", "TEMPLATES", "PUBLICSHARE",
+    "DOCUMENTS", "MUSIC", "PICTURES", "VIDEOS",
+}
+
+
+def _xdg_dir_candidates(normalized: str) -> List[str]:
+    """Map a normalized target onto candidate XDG user-dir type names.
+
+    `xdg-user-dir` silently falls back to $HOME for a type it does not
+    recognize instead of failing, so an unrecognized name must never be
+    passed to it directly - it would look like a (wrong) successful match.
+    """
+    if normalized in XDG_DIR_TYPES:
+        return [normalized]
+    candidates = []
+    if normalized.endswith("S") and normalized[:-1] in XDG_DIR_TYPES:
+        candidates.append(normalized[:-1])
+    if normalized in {"PUBLIC", "SHARE", "SHARED", "PUBLICSHARED"}:
+        candidates.append("PUBLICSHARE")
+    return candidates
+
+
 def resolve_user_directory(target: str) -> Optional[Path]:
     """Resolve an XDG user directory without assuming a username or fixed path."""
     normalized = re.sub(r"[^a-zA-Z0-9_]", "", target).upper()
     if not normalized:
         return None
 
-    if shutil.which("xdg-user-dir"):
-        try:
-            result = subprocess.run(
-                ["xdg-user-dir", normalized],
-                capture_output=True, text=True, check=True
-            )
-            configured = result.stdout.strip()
-            if configured:
-                return Path(configured).expanduser()
-        except (OSError, subprocess.CalledProcessError):
-            pass
+    for xdg_type in _xdg_dir_candidates(normalized):
+        if shutil.which("xdg-user-dir"):
+            try:
+                result = subprocess.run(
+                    ["xdg-user-dir", xdg_type],
+                    capture_output=True, text=True, check=True
+                )
+                configured = result.stdout.strip()
+                if configured:
+                    return Path(configured).expanduser()
+            except (OSError, subprocess.CalledProcessError):
+                pass
 
-    user_dirs = Path.home() / ".config" / "user-dirs.dirs"
-    if user_dirs.exists():
-        try:
-            for line in user_dirs.read_text().splitlines():
-                if line.startswith(f"XDG_{normalized}_DIR="):
-                    configured = line.split("=", 1)[1].strip().strip('"')
-                    directory = Path(os.path.expandvars(configured.replace("$HOME", str(Path.home()))))
-                    return directory
-        except OSError:
-            pass
+        user_dirs = Path.home() / ".config" / "user-dirs.dirs"
+        if user_dirs.exists():
+            try:
+                for line in user_dirs.read_text().splitlines():
+                    if line.startswith(f"XDG_{xdg_type}_DIR="):
+                        configured = line.split("=", 1)[1].strip().strip('"')
+                        return Path(os.path.expandvars(configured.replace("$HOME", str(Path.home()))))
+            except OSError:
+                pass
 
     return None
 
 
-def resolve_navigation_target(action: str, target: str) -> Optional[Dict[str, Any]]:
-    """Turn a model-identified navigation target into a local command."""
-    if action.lower() not in {"navigate", "open", "change_directory"}:
+def detect_shell() -> str:
+    """Detect the shell that launched the application."""
+    try:
+        process = psutil.Process(os.getppid())
+        for parent in [process] + process.parents():
+            name = parent.name().lower().removesuffix(".exe")
+            if name in ("pwsh", "powershell"):
+                return "powershell"
+            if name == "cmd":
+                return "cmd"
+            if name in ("bash", "zsh", "fish", "sh", "dash", "ksh"):
+                return "sh" if name in ("dash", "ksh") else name
+    except psutil.Error:
+        pass
+    if platform.system() == "Windows":
+        return "powershell"
+    shell = Path(os.environ.get("SHELL", "/bin/bash")).name
+    return shell if shell in SHELL_LABELS else "bash"
+
+
+def resolve_navigation_target(action: str, target: str, shell: str) -> Optional[Dict[str, Any]]:
+    """Turn a model-identified navigation target into shell-specific syntax."""
+    if action.lower() != "navigate" or not target.strip():
         return None
     if target.strip().lower() in {"current", "current_directory", "working_directory"}:
-        return {"command": "pwd", "confidence": 1.0}
+        command = {
+            "powershell": "Get-Location",
+            "cmd": "cd",
+        }.get(shell, "pwd")
+        return {"command": command, "confidence": 1.0}
+    if target.strip().lower() in {"home", "home_directory", "homedir", "~"}:
+        directory = Path.home()
+        if shell == "powershell":
+            escaped = str(directory).replace("'", "''")
+            return {"command": f"Set-Location -LiteralPath '{escaped}'", "confidence": 1.0}
+        if shell == "cmd":
+            return {"command": f'cd /d "{directory}"', "confidence": 1.0}
+        return {"command": f"cd {shlex.quote(str(directory))}", "confidence": 1.0}
     directory = resolve_user_directory(target)
     if directory is None:
+        candidate = Path(target).expanduser()
+        if not candidate.is_absolute():
+            home_candidate = Path.home() / target.strip().capitalize()
+            candidate = home_candidate if home_candidate.exists() else candidate
+        directory = candidate
+    if not directory.exists():
         return None
+    if shell == "powershell":
+        escaped = str(directory).replace("'", "''")
+        return {"command": f"Set-Location -LiteralPath '{escaped}'", "confidence": 1.0}
+    if shell == "cmd":
+        return {"command": f'cd /d "{directory}"', "confidence": 1.0}
     return {"command": f"cd {shlex.quote(str(directory))}", "confidence": 1.0}
+
+
+def run_in_shell(command: str, shell: str) -> subprocess.CompletedProcess:
+    """Execute a command with the same shell family used for generation."""
+    if shell == "powershell":
+        executable = shutil.which("pwsh") or shutil.which("powershell") or "powershell"
+        return subprocess.run(
+            [executable, "-NoProfile", "-NonInteractive", "-Command", command],
+            text=True,
+            capture_output=True,
+        )
+    if shell == "cmd":
+        return subprocess.run(command, shell=True, text=True, capture_output=True)
+    executable = shutil.which(shell) or "/bin/sh"
+    return subprocess.run([executable, "-c", command], text=True, capture_output=True)
 
 
 def is_gpu_available() -> bool:
@@ -256,9 +346,41 @@ class ShellCommandGenerator:
             ollama_host = f"http://{ollama_host}"
         self.ollama_base_url = ollama_host.rstrip("/")
         self.ollama_api = f"{self.ollama_base_url}/api/generate"
+        self.shell = detect_shell()
         self._load_history()
         self._check_ollama_status()
-        
+        self._warm_up_model()
+
+    def _warm_up_model(self) -> None:
+        """Pre-load the model and cache the static system-prompt prefix.
+
+        Every request shares the same instructions/rules/examples text for
+        the life of the session (only the trailing "User request" line
+        changes), so Ollama can reuse that cached prefix for every request
+        after this one. Paying that one-time prefill cost now, while the
+        user is still reading the banner, keeps their first real prompt
+        from taking noticeably longer than the rest.
+        """
+        console.print("[dim]Warming up the model...[/dim]")
+        try:
+            system_prompt = build_system_prompt(self.shell, Path.cwd(), "list files here")
+            requests.post(
+                self.ollama_api,
+                json={
+                    "model": self.model_name,
+                    "system": system_prompt,
+                    "prompt": "User: list files here\nJSON:",
+                    "stream": False,
+                    "format": FORMAT_SCHEMA,
+                    "think": False,
+                    "keep_alive": "5m",
+                    "options": {"temperature": 0.0, "top_p": 1.0, "num_predict": 64},
+                },
+                timeout=self.timeout,
+            )
+        except requests.exceptions.RequestException as e:
+            logging.warning(f"Model warm-up skipped: {e}")
+
     def _load_history(self) -> None:
         """Load command history from file"""
         try:
@@ -383,58 +505,17 @@ class ShellCommandGenerator:
             return error_result
 
     def _call_ollama(self, prompt: str) -> Dict[str, Any]:
-        """Call Ollama API with retry logic, refined prompt, and improved output instructions."""
-        context = get_os_info()
-        message = f"""
-Operating system: {context}
-Current working directory: {Path.cwd()}
-
-You convert one natural-language request into one safe shell decision.
-Return exactly one JSON object with these four keys and no markdown or explanation:
-{{"action":"command|navigate", "target":"", "command":"", "confidence":0.0}}
-
-Rules:
-1. Use action "command" for shell commands. Use action "navigate" only when the user
-   explicitly asks to go/open/change directory. For navigation, put the requested user
-   directory name in target (Desktop, Documents, Downloads, etc.) and leave command empty.
-2. A request to locate, show, or identify the current folder means action "command",
-   target "current_directory", command "pwd".
-3. Preserve paths exactly as written. Never replace a relative path such as "src" with
-   the working directory, invent paths, or add arbitrary limits.
-4. Return one command or a pipeline only. Do not use explanations, aliases, placeholders,
-   command substitution, chaining, redirection, or destructive operations unless explicitly requested.
-5. If the request is ambiguous or unsafe, return an empty command and low confidence.
-
-Examples:
-User: locate this folder
-JSON: {{"action":"command","target":"current_directory","command":"pwd","confidence":0.99}}
-User: move to the desktop
-JSON: {{"action":"navigate","target":"Desktop","command":"","confidence":0.99}}
-User: find Python files under src
-JSON: {{"action":"command","target":"","command":"find src -type f -name '*.py'","confidence":0.90}}
-User: list hidden files here
-JSON: {{"action":"command","target":"","command":"ls -la","confidence":0.99}}
-
-User request: {prompt}
-"""
+        """Call the shell-aware Ollama API with structured-output retries."""
+        system_prompt = build_system_prompt(self.shell, Path.cwd(), prompt)
         data = {
             "model": self.model_name,
-            "prompt": message,
-            "temperature": self.temperature,
+            "system": system_prompt,
+            "prompt": f"User: {prompt}\nJSON:",
             "stream": False,
-            "format": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "enum": ["command", "navigate"]},
-                    "target": {"type": "string"},
-                    "command": {"type": "string"},
-                    "confidence": {"type": "number", "minimum": 0, "maximum": 1}
-                },
-                "required": ["action", "target", "command", "confidence"]
-            },
+            "format": FORMAT_SCHEMA,
             "think": False,
             "keep_alive": "5m",
-            "options": {"temperature": 0.0, "num_predict": 96}
+            "options": {"temperature": 0.0, "top_p": 1.0, "num_predict": 256}
         }
         for attempt in range(self.max_retries):
             try:
@@ -448,23 +529,24 @@ User request: {prompt}
                 if "response" not in result:
                     raise ValueError("Invalid API response format")
                 raw_response = result["response"].strip()
-                confidence = None
-                try:
-                    response_data = json.loads(raw_response)
-                    command = response_data["command"]
-                    confidence = response_data.get("confidence")
+                # A well-behaved model returns pure JSON; a small local model can
+                # instead wrap it in a stray word or drop the JSON structure
+                # entirely and just emit a bare decision. Recover from both.
+                response_data = extract_json_object(raw_response)
+                if isinstance(response_data, dict):
                     navigation = resolve_navigation_target(
                         response_data.get("action", "command"),
-                        response_data.get("target", "")
+                        response_data.get("target", ""),
+                        self.shell,
                     )
                     if navigation:
                         return navigation
-                except (json.JSONDecodeError, KeyError, TypeError):
-                    # Keep compatibility with older local models that ignore format.
-                    command = raw_response.replace('```shell', '').replace('```', '').strip()
-                    lines = [line.strip() for line in command.splitlines()]
-                    lines = [line for line in lines if line.lower() not in ["bash", "zsh", "sh"]]
-                    command = " ".join(lines).strip()
+                    command = clean_command(str(response_data.get("command", "")))
+                    confidence = response_data.get("confidence")
+                else:
+                    command, confidence = clean_command(raw_response), None
+                if confidence is not None and confidence < 0.5:
+                    return {"command": "", "confidence": confidence}
                 return {"command": command, "confidence": confidence}
             except requests.exceptions.RequestException as e:
                 logging.warning(f"Ollama API call attempt {attempt+1} failed: {e}")
@@ -476,7 +558,7 @@ User request: {prompt}
     def execute_command(self, command: str, confirm_execution: bool = True) -> bool:
         """Safely execute a shell command with validation, feedback, and improved output."""
         try:
-            is_valid, error = CommandValidator.validate(command)
+            is_valid, error = CommandValidator.validate(command, shell=shell_family(self.shell))
             if not is_valid:
                 console.print(f"[red]Command validation failed: {error}[/red]")
                 return False
@@ -489,12 +571,7 @@ User request: {prompt}
                 if confirm.lower() != "yes":
                     return False
             console.print("\n[cyan]Executing command...[/cyan]")
-            result = subprocess.run(
-                command,
-                shell=True,
-                text=True,
-                capture_output=True
-            )
+            result = run_in_shell(command, self.shell)
             if result.returncode == 0:
                 console.print("[green]Command executed successfully[/green]")
                 if result.stdout:
@@ -592,8 +669,6 @@ User request: {prompt}
                         )
                         if (choice.lower() == "y"):
                             self.execute_command(result["command"], confirm_execution=False)
-                            console.print("[green]Exiting...[/green]")
-                            sys.exit(0)
                         else:
                             console.print("[blue]Continuing with a new prompt...[/blue]")
                     else:
